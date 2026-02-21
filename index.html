@@ -141,6 +141,8 @@ const API="https://script.google.com/macros/s/AKfycbwA7pj0SnCk1EWr5c9-YFSjmVch3B
 const CARD_FEE_RATE=0.03;
 const fmt=n=>new Intl.NumberFormat("vi-VN").format(Math.round(n));
 const fmtK=n=>{if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e3)return Math.round(n/1e3)+"K";return fmt(n)};
+const vnNow=()=>new Date().toLocaleString("sv-SE",{timeZone:"Asia/Ho_Chi_Minh"});
+const vnDate=()=>vnNow().split(" ")[0];
 const brandColor=b=>({"KS":"#D4AF37","CH":"#C77DFF","OTS":"#00B4D8","CT":"#EF476F","KP":"#06D6A0","KR":"#118AB2","TF":"#FF6B35","MD":"#7209B7","GR":"#FFD166","SV":"#8D99AE","TOOTHCHARMGEM":"#2EC4B6","W":"#073B4C","HB":"#E56B6F","HD":"#B5838D","AC":"#6D6875","OR":"#FFBE0B","CX":"#FB5607","PR":"#3A86FF","SE":"#8338EC"})[b]||"#6B7280";
 const catIcon=c=>({"RING":"💍","NECKLACE":"📿","EAR STUD":"✨","EAR HOOP":"⭕","BRACELET":"⛓","EAR CUFF":"🌙","EAR HOOK":"🪝","CHAIN":"🔗","PENDANT":"🔮","BANGLE":"🪬","NOSE RING":"👃","ACCESSORY":"🎀","WATCH":"⌚","GRILLZ":"🦷","TOOTHGEM":"💎","TOOTHCHARM":"✦","Service":"🔧","KEYCHAIN":"🔑","BROOCH":"🌸","ANK":"🦶"})[c]||"📦";
 const CAT_ORDER=["RING","NECKLACE","EAR STUD","EAR HOOP","BRACELET","EAR CUFF","CHAIN","PENDANT","BANGLE","GRILLZ","TOOTHGEM","TOOTHCHARM","Service","WATCH","NOSE RING","EAR HOOK","KEYCHAIN","ACCESSORY","BROOCH","ANK"];
@@ -302,7 +304,7 @@ function MainApp({auth,pin,onLogout}){
   var filtered=useMemo(function(){return products.filter(function(p){
     if(catFilter!=="ALL"&&p.type!==catFilter)return false;
     if(brandFilter!=="ALL"&&p.brand!==brandFilter)return false;
-    if(search){var s=search.toLowerCase();return p.name.toLowerCase().includes(s)||p.id.toLowerCase().includes(s)||p.cat.toLowerCase().includes(s);}
+    if(search){var words=search.toLowerCase().split(/\s+/).filter(Boolean);var target=(p.name+" "+p.id+" "+p.cat).toLowerCase();return words.every(function(w){return target.indexOf(w)>=0;});}
     return true;
   });},[search,catFilter,brandFilter,products]);
   var cartQtyMap=useMemo(function(){var m={};cart.forEach(function(i){m[i.id]=(m[i.id]||0)+i.qty;});return m;},[cart]);
@@ -334,7 +336,7 @@ function MainApp({auth,pin,onLogout}){
       var items=cart.map(function(i){var lineNet=i.qty*i.unitPrice-(i.discount||0);var share=totals.afterItemDisc>0?lineNet/totals.afterItemDisc:0;var lineAfterBill=lineNet-(totals.billDiscAmt*share);return{productId:i.id,name:i.name,brand:i.brand,cat:i.type,qty:i.qty,unitPrice:i.unitPrice,discount:i.discount||0,lineNet:Math.round(Math.max(0,lineAfterBill)),rate:i.rate||0,commFull:Math.round(Math.max(0,lineAfterBill)*(i.rate||0))};});
       var res=await apiPost({action:"submit_order",pin:pin,customerName:custName,customerPhone:custPhone,subtotal:totals.subtotal,itemDiscTotal:totals.itemDiscTotal,billDiscAmt:totals.billDiscAmt,billDiscPct:totals.billDiscPct,netCommBase:totals.netCommBase,cardFeeAmt:totals.cardFeeAmt,shipAmt:totals.shipAmt,grandTotal:totals.grandTotal,notes:orderNotes,items:items});
       if(!res.ok)throw new Error(res.error);
-      setOrders(function(prev){return[Object.assign({orderId:res.orderId,date:new Date().toISOString(),staffId:auth.id,staffName:auth.name,customerName:custName||"Walk-in"},totals,{items:items,payments:[],notes:orderNotes,status:"ACTIVE"})].concat(prev);});
+      setOrders(function(prev){return[Object.assign({orderId:res.orderId,date:vnNow(),staffId:auth.id,staffName:auth.name,customerName:custName||"Walk-in"},totals,{items:items,payments:[],notes:orderNotes,status:"ACTIVE"})].concat(prev);});
       setCart([]);setCustName("");setCustPhone("");setBillDiscVal(0);setBillDiscType("pct");setShippingFee(0);setCardFeeOn(false);setOrderNotes("");
       showToast("✓ "+res.orderId+" saved",2000);setTab("orders");
     }catch(err){showToast("❌ "+err.message,3000);}finally{setSubmitting(false);}
@@ -344,7 +346,7 @@ function MainApp({auth,pin,onLogout}){
     setSubmitting(true);
     try{var res=await apiPost({action:"add_payment",pin:pin,orderId:orderId,method:p.method,amount:p.amount,amountForComm:0,note:p.note});
       if(!res.ok)throw new Error(res.error);
-      setOrders(function(prev){return prev.map(function(o){if(o.orderId!==orderId)return o;return Object.assign({},o,{payments:(o.payments||[]).concat([{paymentId:res.paymentId,method:p.method,amount:p.amount,note:p.note,date:new Date().toISOString().split("T")[0]}])});});});
+      setOrders(function(prev){return prev.map(function(o){if(o.orderId!==orderId)return o;return Object.assign({},o,{payments:(o.payments||[]).concat([{paymentId:res.paymentId,method:p.method,amount:p.amount,note:p.note,date:vnDate()}])});});});
       showToast("✓ Payment recorded");
     }catch(err){showToast("❌ "+err.message,3000);}finally{setSubmitting(false);}
   };
