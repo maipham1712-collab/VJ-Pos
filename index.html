@@ -23,8 +23,8 @@ body{background:var(--bg);color:var(--t);font-family:'DM Sans',sans-serif}
 .tb-i{font-size:22px;filter:grayscale(1) opacity(0.4);transition:all 0.2s}.tb.on .tb-i{filter:none}
 .tb-l{font-size:10px;color:var(--t3);font-weight:500}.tb.on .tb-l{color:var(--gold);font-weight:600}
 .badge{position:absolute;top:2px;right:calc(50% - 18px);background:var(--red);color:#fff;font-size:10px;font-weight:700;min-width:18px;height:18px;border-radius:9px;display:flex;align-items:center;justify-content:center;padding:0 4px}
-/* FIX #2: Sticky search bar & filters */
-.search-sticky{position:sticky;top:0;z-index:40;background:var(--bg);padding-bottom:4px}
+/* FIX #2: Search bar sits between .top and .main in flex layout — never scrolls */
+.search-sticky{flex-shrink:0;background:var(--bg);padding-bottom:4px;border-bottom:1px solid var(--brd)}
 .sbar{margin:12px 16px 8px;position:relative}
 .sbar input{width:100%;background:var(--s2);border:1px solid var(--brd);border-radius:12px;padding:12px 16px 12px 40px;color:var(--t);font-size:15px;font-family:'DM Sans',sans-serif;outline:none}
 .sbar input:focus{border-color:var(--gold-dim)}.sbar input::placeholder{color:var(--t3)}
@@ -549,17 +549,17 @@ function MainApp({auth,pin,onLogout}){
 
   // ── RENDER ──
 
-  // FIX #2: Products tab with sticky search bar and filters
-  // Search-sticky is a DIRECT child of .main so position:sticky works against the scroll container
+  // FIX #2: Search bar rendered OUTSIDE .main so it never scrolls
+  var searchBar = tab==="products" ? e("div",{className:"search-sticky"},
+    e("div",{className:"sbar"},e("span",{className:"si"},"🔍"),e("input",{placeholder:"Search products or code...",value:search,onChange:function(ev){setSearch(ev.target.value);}})),
+    e("div",{className:"flts"},
+      e("div",{className:"fs"},categories.slice(0,15).map(function(c){return e("button",{key:c,className:"pill "+(catFilter===c?"on":""),onClick:function(){setCatFilter(c);}},c==="ALL"?"All Types":catIcon(c)+" "+c);})),
+      e("div",{className:"fd"}),
+      e("div",{className:"fs"},brands.map(function(b){return e("button",{key:b,className:"pill "+(brandFilter===b?"on":""),onClick:function(){setBrandFilter(b);}},b==="ALL"?"All Brands":b);}))
+    )
+  ) : null;
+
   var productsTab = tab==="products" ? e(Fragment,null,
-    e("div",{className:"search-sticky"},
-      e("div",{className:"sbar"},e("span",{className:"si"},"🔍"),e("input",{placeholder:"Search products or code...",value:search,onChange:function(ev){setSearch(ev.target.value);}})),
-      e("div",{className:"flts"},
-        e("div",{className:"fs"},categories.slice(0,15).map(function(c){return e("button",{key:c,className:"pill "+(catFilter===c?"on":""),onClick:function(){setCatFilter(c);}},c==="ALL"?"All Types":catIcon(c)+" "+c);})),
-        e("div",{className:"fd"}),
-        e("div",{className:"fs"},brands.map(function(b){return e("button",{key:b,className:"pill "+(brandFilter===b?"on":""),onClick:function(){setBrandFilter(b);}},b==="ALL"?"All Brands":b);}))
-      )
-    ),
     e("div",{className:"pcnt"},filtered.length+" products · tap to add"),
     e("div",{className:"pgrid"},filtered.map(function(p){return e("div",{key:p.id,className:"pcard",onClick:function(){quickAdd(p);}},
       e("div",{className:"pimg"},
@@ -723,6 +723,8 @@ function MainApp({auth,pin,onLogout}){
         )
       ),
       error ? e("div",{className:"err-banner"},"⚠️ "+error) : null,
+      // FIX #2: Search bar sits outside .main — always visible on Products tab
+      searchBar,
       // Main content
       e("div",{className:"main"},
         productsTab,
