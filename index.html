@@ -318,31 +318,70 @@ function MainApp({auth,pin,onLogout}){
   var cardFeeOn=activeDraft.cardFeeOn;
   var orderNotes=activeDraft.orderNotes;
 
-  // Helper to update a field on the active draft
-  var updateDraft=function(field,value){
-    setDrafts(function(prev){return prev.map(function(d){
-      if(d.id!==activeDraftId)return d;
-      var updated=Object.assign({},d);updated[field]=value;return updated;
-    });});
-  };
+  // Ref to track latest activeDraftId for stable callbacks
+  var activeDraftIdRef=useRef(activeDraftId);
+  activeDraftIdRef.current=activeDraftId;
 
-  // Wrapped setters that update the active draft
+  // Wrapped setters that update the active draft — use ref for stable reference
   var setCart=function(valOrFn){
-    setDrafts(function(prev){return prev.map(function(d){
-      if(d.id!==activeDraftId)return d;
-      var updated=Object.assign({},d);
-      updated.cart=typeof valOrFn==="function"?valOrFn(d.cart):valOrFn;
-      return updated;
-    });});
+    setDrafts(function(prev){
+      var currentId=activeDraftIdRef.current;
+      return prev.map(function(d){
+        if(d.id!==currentId)return d;
+        var updated=Object.assign({},d);
+        updated.cart=typeof valOrFn==="function"?valOrFn(d.cart):valOrFn;
+        return updated;
+      });
+    });
   };
-  var setCid=function(v){updateDraft("cid",v);};
-  var setCustName=function(v){updateDraft("custName",v);};
-  var setCustPhone=function(v){updateDraft("custPhone",v);};
-  var setBillDiscVal=function(v){updateDraft("billDiscVal",v);};
-  var setBillDiscType=function(v){updateDraft("billDiscType",v);};
-  var setShippingFee=function(v){updateDraft("shippingFee",v);};
-  var setCardFeeOn=function(v){updateDraft("cardFeeOn",v);};
-  var setOrderNotes=function(v){updateDraft("orderNotes",v);};
+  var setCid=function(v){
+    setDrafts(function(prev){
+      var currentId=activeDraftIdRef.current;
+      return prev.map(function(d){return d.id===currentId?Object.assign({},d,{cid:v}):d;});
+    });
+  };
+  var setCustName=function(v){
+    setDrafts(function(prev){
+      var currentId=activeDraftIdRef.current;
+      return prev.map(function(d){return d.id===currentId?Object.assign({},d,{custName:v}):d;});
+    });
+  };
+  var setCustPhone=function(v){
+    setDrafts(function(prev){
+      var currentId=activeDraftIdRef.current;
+      return prev.map(function(d){return d.id===currentId?Object.assign({},d,{custPhone:v}):d;});
+    });
+  };
+  var setBillDiscVal=function(v){
+    setDrafts(function(prev){
+      var currentId=activeDraftIdRef.current;
+      return prev.map(function(d){return d.id===currentId?Object.assign({},d,{billDiscVal:v}):d;});
+    });
+  };
+  var setBillDiscType=function(v){
+    setDrafts(function(prev){
+      var currentId=activeDraftIdRef.current;
+      return prev.map(function(d){return d.id===currentId?Object.assign({},d,{billDiscType:v}):d;});
+    });
+  };
+  var setShippingFee=function(v){
+    setDrafts(function(prev){
+      var currentId=activeDraftIdRef.current;
+      return prev.map(function(d){return d.id===currentId?Object.assign({},d,{shippingFee:v}):d;});
+    });
+  };
+  var setCardFeeOn=function(v){
+    setDrafts(function(prev){
+      var currentId=activeDraftIdRef.current;
+      return prev.map(function(d){return d.id===currentId?Object.assign({},d,{cardFeeOn:v}):d;});
+    });
+  };
+  var setOrderNotes=function(v){
+    setDrafts(function(prev){
+      var currentId=activeDraftIdRef.current;
+      return prev.map(function(d){return d.id===currentId?Object.assign({},d,{orderNotes:v}):d;});
+    });
+  };
 
   var addDraft=function(){
     var num=nextDraftNum;
@@ -356,30 +395,40 @@ function MainApp({auth,pin,onLogout}){
     setDrafts(function(prev){
       var remaining=prev.filter(function(d){return d.id!==id;});
       if(remaining.length===0){
-        var num=nextDraftNum;setNextDraftNum(num+1);
+        var num=nextDraftNum;
         remaining=[createEmptyDraft(num)];
+        // Can't call setNextDraftNum inside setDrafts — schedule it
+        setTimeout(function(){setNextDraftNum(num+1);},0);
+      }
+      // If removing active draft, switch to first remaining
+      if(activeDraftIdRef.current===id){
+        var newId=remaining[0].id;
+        setTimeout(function(){setActiveDraftId(newId);},0);
       }
       return remaining;
     });
-    if(activeDraftId===id){
-      setDrafts(function(prev){
-        var first=prev.filter(function(d){return d.id!==id;})[0];
-        if(first)setActiveDraftId(first.id);
-        return prev;
-      });
-    }
   };
   var switchDraft=function(id){setActiveDraftId(id);setTab("order");};
   var resetActiveDraft=function(){
-    var num=nextDraftNum;setNextDraftNum(num+1);
+    var currentId=activeDraftIdRef.current;
     setDrafts(function(prev){
-      var cleaned=prev.filter(function(d){return d.id!==activeDraftId;});
-      // If this was the only draft, create a fresh one
+      var cleaned=prev.filter(function(d){return d.id!==currentId;});
       if(cleaned.length===0){
-        var nd=createEmptyDraft(num);setActiveDraftId(num);return[nd];
+        // Will switch to new draft after state update
+        return cleaned;
       }
-      setActiveDraftId(cleaned[0].id);
+      setTimeout(function(){setActiveDraftId(cleaned[0].id);},0);
       return cleaned;
+    });
+    // If all drafts removed, add a fresh one
+    setDrafts(function(prev){
+      if(prev.length===0){
+        var num=nextDraftNum;
+        var nd=createEmptyDraft(num);
+        setTimeout(function(){setNextDraftNum(num+1);setActiveDraftId(num);},0);
+        return[nd];
+      }
+      return prev;
     });
   };
 
@@ -429,9 +478,9 @@ function MainApp({auth,pin,onLogout}){
     setCart(function(prev){return prev.concat([{id:"CUSTOM-"+n,name:customName,type:"ORDER",cat:customName,brand:"OR",price:customPrice,qty:1,unitPrice:customPrice,discount:0,discountPct:0,cartId:n,rate:0.02,isService:true,img:""}]);});
     setShowCustom(false);setCustomName("");setCustomPrice(0);showToast("✓ Custom item added");
   };
-  var quickAdd=useCallback(function(p){var n=cid+1;setCid(n);setCart(function(prev){return prev.concat([Object.assign({},p,{qty:1,unitPrice:p.price,discount:0,discountPct:0,cartId:n})]);});showToast("✓ "+p.id+" added");setJustAddedId(p.id);setTimeout(function(){setJustAddedId(null);},600);},[cid,activeDraftId]);
-  var updateCart=useCallback(function(id,f,v){setCart(function(prev){return prev.map(function(i){return i.cartId===id?Object.assign({},i,{[f]:v}):i;});});},[activeDraftId]);
-  var removeCart=useCallback(function(id){setCart(function(prev){return prev.filter(function(i){return i.cartId!==id;});});},[activeDraftId]);
+  var quickAdd=function(p){var n=cid+1;setCid(n);setCart(function(prev){return prev.concat([Object.assign({},p,{qty:1,unitPrice:p.price,discount:0,discountPct:0,cartId:n})]);});showToast("✓ "+p.id+" added");setJustAddedId(p.id);setTimeout(function(){setJustAddedId(null);},600);};
+  var updateCart=function(id,f,v){setCart(function(prev){return prev.map(function(i){return i.cartId===id?Object.assign({},i,{[f]:v}):i;});});};
+  var removeCart=function(id){setCart(function(prev){return prev.filter(function(i){return i.cartId!==id;});});};
 
   var totals=useMemo(function(){
     var subtotal=cart.reduce(function(s,i){return s+i.qty*i.unitPrice;},0);
@@ -501,7 +550,8 @@ function MainApp({auth,pin,onLogout}){
   // ── RENDER ──
 
   // FIX #2: Products tab with sticky search bar and filters
-  var productsTab = tab==="products" ? e("div",{className:"fin"},
+  // Search-sticky is a DIRECT child of .main so position:sticky works against the scroll container
+  var productsTab = tab==="products" ? e(Fragment,null,
     e("div",{className:"search-sticky"},
       e("div",{className:"sbar"},e("span",{className:"si"},"🔍"),e("input",{placeholder:"Search products or code...",value:search,onChange:function(ev){setSearch(ev.target.value);}})),
       e("div",{className:"flts"},
