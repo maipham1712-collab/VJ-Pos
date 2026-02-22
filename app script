@@ -1,478 +1,947 @@
 // ═══════════════════════════════════════════════════════════
-// VJ-POS Google Apps Script API v2.0
+// VJ-POS Google Apps Script API v2.1.0 (Hardened)
 // ═══════════════════════════════════════════════════════════
-// 
-// CHANGES from v1.1:
-// - PIN authentication (Admin_Staff column E)
-// - Void order (admin only)
-// - Bulk stock import endpoint
-// - Auth validation on all write operations
 //
-// ADMIN_STAFF SETUP:
-// Add column E header "pin" with 4-digit PINs for each staff:
-//   A        B      C        D       E
-//   S01      Mai    manager  TRUE    1234
-//   S02      Linh   staff    TRUE    5678
-//   S03      Thái   staff    TRUE    9012
-//   S04      Huyền  staff    TRUE    3456
-//   S05      Cover  staff    TRUE    7890
+// MỤC TIÊU BẢN NÀY:
+// 1) Luôn trả JSON (kể cả khi lỗi / exception) => frontend không bị "mù lỗi"
+// 2) Có endpoint GET action=ping và action=schema để test nhanh
+// 3) Dùng LockService chống trùng orderId khi submit đồng thời
+// 4) Đọc/ghi theo HEADER (có fallback theo index) để chống lệch cột
+// 5) Giữ tương thích với frontend hiện tại (actions + response shape)
 //
-// HOW TO UPDATE:
-// 1. Open Apps Script (Extensions → Apps Script)
-// 2. Replace ALL code in Code.gs with this file
-// 3. Click Save
-// 4. Deploy → Manage Deployments → Edit → Version: New → Deploy
+// DEPLOY:
+// Extensions → Apps Script → dán đè toàn bộ Code.gs → Save
+// Deploy → Manage deployments → Edit → Version: New → Deploy
+//
+// LƯU Ý CORS:
+// Frontend hiện tại đang POST mà KHÔNG set Content-Type => tránh preflight.
+// ĐỪNG tự ý thêm headers Content-Type: application/json ở frontend (sẽ dễ dính CORS).
 // ═══════════════════════════════════════════════════════════
 
 const SS = SpreadsheetApp.getActiveSpreadsheet();
 
+const API_VERSION = "2.1.0";
+const TZ = Session.getScriptTimeZone();
+
+// Service type detection (giữ như v2.0)
+const SERVICE_TYPES = ["Service", "GRILLZ", "TOOTHGEM", "TOOTHCHARM"];
+
+// ===== Schema expectations (dùng cho action=schema) =====
+const SCHEMA = {
+  Admin_Staff: {
+    requiredAnyOf: {
+      staff_id: ["staff_id", "id", "staffid"],
+      name: ["name", "staff_name", "staffname"],
+      role: ["role", "staff_role", "staffrole"],
+      active: ["active", "is_active", "enabled"],
+      pin: ["pin", "staff_pin", "staffpin"],
+    },
+  },
+  Admin_Products: {
+    requiredAnyOf: {
+      product_id: ["product_id", "id", "productid"],
+      ten_hang: ["ten_hang", "tên_hàng", "tenhang"],
+      loai_hang: ["loai_hang", "loại_hàng", "type", "loaihang"],
+      nhom_hang: ["nhom_hang", "nhóm_hàng", "cat", "category", "nhomhang", "group"],
+      brand: ["brand", "brand_id", "thuong_hieu", "thương_hiệu"],
+      price: ["gia_ban", "price", "giaban"],
+      cost: ["gia_von", "cost", "giavon"],
+      qty: ["ton_kho", "qty_on_hand", "qty", "tonkho"],
+      img: ["image_url", "img", "image", "imageurl"],
+      active: ["active", "is_active", "enabled"],
+    },
+  },
+  Orders: {
+    requiredAnyOf: {
+      order_id: ["order_id", "orderid", "id"],
+      date: ["date", "created_at", "created", "datetime"],
+      staff_id: ["staff_id", "staffid"],
+      customer_name: ["customer_name", "cust_name", "name"],
+      customer_phone: ["customer_phone", "cust_phone", "phone"],
+      subtotal: ["subtotal"],
+      item_disc_total: ["item_disc_total", "item_discount_total"],
+      bill_disc_amt: ["bill_disc_amt", "bill_discount_amt"],
+      bill_disc_pct: ["bill_disc_pct", "bill_discount_pct"],
+      net_comm_base: ["net_comm_base"],
+      card_fee_amt: ["card_fee_amt"],
+      ship_amt: ["ship_amt", "shipping_fee"],
+      grand_total: ["grand_total", "total"],
+      notes: ["notes", "note"],
+      status: ["status"],
+    },
+  },
+  Order_Items: {
+    requiredAnyOf: {
+      line_item_id: ["line_item_id", "lineitem_id", "id"],
+      order_id: ["order_id", "orderid"],
+      product_id: ["product_id", "productid"],
+      name: ["name", "product_name"],
+      brand: ["brand", "brand_id", "thuong_hieu"],
+      cat: ["cat", "category", "nhom_hang"],
+      qty: ["qty", "quantity"],
+      unit_price: ["unit_price", "price"],
+      discount: ["discount", "disc"],
+      line_net: ["line_net", "net"],
+      staff_id: ["staff_id", "staffid"],
+      rate: ["rate"],
+      comm_full: ["comm_full", "commission_full"],
+    },
+  },
+  Payments: {
+    requiredAnyOf: {
+      payment_id: ["payment_id", "paymentid", "id"],
+      order_id: ["order_id", "orderid"],
+      date: ["date", "created_at", "created"],
+      method: ["method"],
+      amount: ["amount"],
+      amount_for_comm: ["amount_for_comm", "amountforcomm", "amount_comm"],
+      note: ["note", "notes"],
+    },
+  },
+  Admin_Artists: {
+    requiredAnyOf: {
+      id: ["id", "artist_id", "brand_id", "brand"],
+      name: ["name"],
+      type: ["type"],
+      rate: ["rate"],
+    },
+  },
+  Admin_Stock_Log: {
+    requiredAnyOf: {
+      log_id: ["log_id", "id"],
+      date: ["date", "created_at", "created"],
+      product_id: ["product_id", "productid"],
+      change_type: ["change_type", "type"],
+      qty_change: ["qty_change", "qtychange"],
+      qty_before: ["qty_before", "qtybefore"],
+      qty_after: ["qty_after", "qtyafter"],
+      reference: ["reference", "ref"],
+      changed_by: ["changed_by", "by"],
+    },
+  },
+};
+
+// ===== Entry points =====
 function doGet(e) {
-  const action = (e.parameter.action || '').toLowerCase();
-  let result;
-  try {
+  const reqId = _reqId_();
+  const params = (e && e.parameter) ? e.parameter : {};
+  const action = String(params.action || "").toLowerCase().trim();
+
+  return _handle_(reqId, "GET", action, () => {
     switch (action) {
-      case 'products': result = getProducts(); break;
-      case 'staff': result = getStaffPublic(); break;
-      case 'artists': result = getArtists(); break;
-      case 'orders': result = getOrders(); break;
-      case 'login': result = login(e.parameter.pin || ''); break;
-      default: result = { ok: true, msg: 'VJ-POS API v2.0' };
+      case "ping": return _ok_({ msg: "pong", version: API_VERSION });
+      case "schema": return schemaReport();
+      case "products": return getProducts();
+      case "staff": return getStaffPublic();
+      case "artists": return getArtists();
+      case "orders": return getOrders();
+      case "login": return login(params.pin || "");
+      default:
+        return _ok_({ msg: "VJ-POS API", version: API_VERSION, actions: ["ping","schema","products","staff","artists","orders","login"] });
     }
-  } catch (err) { result = { ok: false, error: err.message }; }
-  return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+  });
 }
 
 function doPost(e) {
-  let body;
-  try { body = JSON.parse(e.postData.contents); } catch (err) { return _json({ ok: false, error: 'Invalid JSON' }); }
-  
-  // Validate PIN on all write operations
-  const pin = body.pin || '';
-  const auth = _validatePin(pin);
-  if (!auth) return _json({ ok: false, error: 'Invalid PIN' });
-  
-  // Inject authenticated staff info
-  body.staffId = auth.id;
-  body.staffName = auth.name;
-  body.staffRole = auth.role;
-  
-  const action = (body.action || '').toLowerCase();
-  let result;
-  try {
+  const reqId = _reqId_();
+
+  // Parse JSON body (frontend hiện tại gửi raw JSON string, không set headers)
+  const raw = (e && e.postData && typeof e.postData.contents === "string") ? e.postData.contents : "";
+  const body = _tryParseJson_(raw);
+  if (!body.ok) return _json_(_err_("Invalid JSON", { detail: body.error, rawHead: raw.slice(0, 120) }, reqId));
+
+  const action = String(body.value.action || "").toLowerCase().trim();
+
+  // Bypass auth cho ping/schema nếu ai đó POST test
+  if (action === "ping") return _json_(_ok_({ msg: "pong", version: API_VERSION }, reqId));
+  if (action === "schema") return _json_(schemaReport(reqId));
+
+  // Validate PIN for all write operations
+  const pin = String(body.value.pin || "").trim();
+  const auth = _validatePin_(pin);
+  if (!auth) return _json_(_err_("Invalid PIN", null, reqId));
+
+  // Inject authenticated staff info (giữ tương thích v2.0)
+  body.value.staffId = auth.id;
+  body.value.staffName = auth.name;
+  body.value.staffRole = auth.role;
+
+  return _handle_(reqId, "POST", action, () => {
     switch (action) {
-      case 'submit_order': result = submitOrder(body); break;
-      case 'add_payment': result = addPayment(body); break;
-      case 'update_stock': result = updateStock(body); break;
-      case 'void_order': result = voidOrder(body); break;
-      case 'bulk_import': result = bulkImport(body); break;
-      default: result = { ok: false, error: 'Unknown action: ' + action };
+      case "submit_order": return submitOrder(body.value);
+      case "add_payment": return addPayment(body.value);
+      case "update_stock": return updateStock(body.value);
+      case "void_order": return voidOrder(body.value);
+      case "bulk_import": return bulkImport(body.value);
+      default:
+        return _err_("Unknown action: " + action, null, reqId);
     }
-  } catch (err) { result = { ok: false, error: err.message }; }
-  return _json(result);
+  });
 }
 
-function _json(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+// ===== Response helpers =====
+function _json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
-// ═══ AUTH ═══
-function _validatePin(pin) {
+function _ok_(data, reqId) {
+  const out = data || {};
+  out.ok = true;
+  out.version = API_VERSION;
+  out.ts = _nowStr_();
+  if (reqId) out.reqId = reqId;
+  return out;
+}
+
+function _err_(message, extra, reqId) {
+  const out = { ok: false, error: String(message || "Error"), version: API_VERSION, ts: _nowStr_() };
+  if (reqId) out.reqId = reqId;
+  if (extra) out.extra = extra;
+  return out;
+}
+
+function _handle_(reqId, method, action, fn) {
+  try {
+    const res = fn();
+    // nếu fn trả object không có ok, bọc thành ok
+    if (res && typeof res === "object" && res.ok === undefined) return _json_(_ok_(res, reqId));
+    if (res && typeof res === "object" && res.reqId === undefined) res.reqId = reqId;
+    return _json_(res);
+  } catch (err) {
+    return _json_(_err_(err && err.message ? err.message : String(err), { method, action }, reqId));
+  }
+}
+
+function _reqId_() {
+  try { return Utilities.getUuid(); } catch (_) { return "REQ-" + new Date().getTime(); }
+}
+
+function _nowStr_() {
+  return Utilities.formatDate(new Date(), TZ, "yyyy-MM-dd HH:mm:ss");
+}
+
+function _tryParseJson_(s) {
+  try {
+    if (!s) return { ok: false, error: "Empty body" };
+    return { ok: true, value: JSON.parse(s) };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+function _asNum_(v, def) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : (def || 0);
+}
+
+function _isFalse_(v) {
+  return v === false || v === 0 || String(v).toUpperCase() === "FALSE";
+}
+
+// ===== Sheet helpers (header map + fallback) =====
+function _sheet_(name) {
+  const ws = SS.getSheetByName(name);
+  if (!ws) throw new Error("Missing sheet: " + name);
+  return ws;
+}
+
+function _headers_(ws) {
+  const lastCol = Math.max(1, ws.getLastColumn());
+  const row = ws.getRange(1, 1, 1, lastCol).getValues()[0] || [];
+  return row.map(h => String(h || "").trim().toLowerCase());
+}
+
+function _hmap_(ws) {
+  const hs = _headers_(ws);
+  const map = {};
+  for (let i = 0; i < hs.length; i++) if (hs[i]) map[hs[i]] = i;
+  return map;
+}
+
+// find a column index by trying a list of header names
+function _col_(hmap, names) {
+  for (const n of names) {
+    const key = String(n || "").trim().toLowerCase();
+    if (key && hmap[key] !== undefined) return hmap[key];
+  }
+  return -1;
+}
+
+// ===== AUTH =====
+function _validatePin_(pin) {
   if (!pin) return null;
-  const ws = SS.getSheetByName('Admin_Staff');
+  const ws = _sheet_("Admin_Staff");
+  const h = _hmap_(ws);
   const data = ws.getDataRange().getValues();
+
+  // Header-based (preferred)
+  const cId = _col_(h, SCHEMA.Admin_Staff.requiredAnyOf.staff_id);
+  const cName = _col_(h, SCHEMA.Admin_Staff.requiredAnyOf.name);
+  const cRole = _col_(h, SCHEMA.Admin_Staff.requiredAnyOf.role);
+  const cActive = _col_(h, SCHEMA.Admin_Staff.requiredAnyOf.active);
+  const cPin = _col_(h, SCHEMA.Admin_Staff.requiredAnyOf.pin);
+
+  // Fallback to v2.0 indexes: A=id, B=name, C=role, D=active, E=pin
+  const fId = 0, fName = 1, fRole = 2, fActive = 3, fPin = 4;
+
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
-    if (!row[0]) continue;
-    const active = row[3];
-    if (active === false || active === 'FALSE' || active === 0) continue;
-    const staffPin = String(row[4] || '').trim(); // E: pin
-    if (staffPin === String(pin).trim()) {
-      return { id: String(row[0]), name: String(row[1] || ''), role: String(row[2] || '') };
+    const id = (cId >= 0) ? row[cId] : row[fId];
+    if (!id) continue;
+
+    const active = (cActive >= 0) ? row[cActive] : row[fActive];
+    if (_isFalse_(active)) continue;
+
+    const staffPin = String((cPin >= 0) ? row[cPin] : row[fPin] || "").trim();
+    if (staffPin && staffPin === String(pin).trim()) {
+      return {
+        id: String(id),
+        name: String((cName >= 0) ? row[cName] : (row[fName] || "")),
+        role: String((cRole >= 0) ? row[cRole] : (row[fRole] || "")),
+      };
     }
   }
   return null;
 }
 
 function login(pin) {
-  const auth = _validatePin(pin);
-  if (!auth) return { ok: false, error: 'Invalid PIN' };
-  return { ok: true, staff: auth };
+  const auth = _validatePin_(String(pin || "").trim());
+  if (!auth) return _err_("Invalid PIN");
+  return { ok: true, staff: auth, version: API_VERSION, ts: _nowStr_() };
 }
 
-// ═══ Service type detection ═══
-const SERVICE_TYPES = ['Service', 'GRILLZ', 'TOOTHGEM', 'TOOTHCHARM'];
-function _isService(loaiHang) {
-  return SERVICE_TYPES.indexOf(String(loaiHang).trim()) >= 0;
+function _isService_(loaiHang) {
+  return SERVICE_TYPES.indexOf(String(loaiHang || "").trim()) >= 0;
 }
 
-// ═══ GET: Products ═══
-function getProducts() {
-  const ws = SS.getSheetByName('Admin_Products');
-  const data = ws.getDataRange().getValues();
-  const artists = _getArtistMap();
-  const products = [];
-  
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    const pid = row[0];
-    if (!pid) continue;
-    const active = row[9];
-    if (active === false || active === 'FALSE' || active === 0) continue;
-    
-    const tenHang = String(row[1] || '');
-    const loaiHang = String(row[2] || '');
-    const nhomHang = String(row[3] || '');
-    const brand = String(row[4] || '');
-    const isService = _isService(loaiHang);
-    const displayName = nhomHang || tenHang;
-    
-    products.push({
-      id: String(pid), name: displayName, type: loaiHang, cat: nhomHang, brand: brand,
-      price: Number(row[5]) || 0, cost: Number(row[6]) || 0,
-      qty: isService ? 999 : (Number(row[7]) || 0),
-      img: String(row[8] || ''), rate: artists[brand] || 0, isService: isService,
-    });
+// ===== GET: schema report =====
+function schemaReport(reqId) {
+  const issues = { missingSheets: [], missingHeaders: {}, detectedHeaders: {} };
+  const required = {};
+
+  for (const sheetName in SCHEMA) {
+    required[sheetName] = SCHEMA[sheetName].requiredAnyOf;
+
+    const ws = SS.getSheetByName(sheetName);
+    if (!ws) {
+      issues.missingSheets.push(sheetName);
+      continue;
+    }
+
+    const hs = _headers_(ws);
+    issues.detectedHeaders[sheetName] = hs;
+
+    const miss = [];
+    const req = SCHEMA[sheetName].requiredAnyOf;
+    for (const key in req) {
+      const variants = req[key].map(x => String(x).toLowerCase());
+      const ok = variants.some(v => hs.indexOf(v) >= 0);
+      if (!ok) miss.push({ field: key, expectedOneOf: req[key] });
+    }
+    if (miss.length) issues.missingHeaders[sheetName] = miss;
   }
-  return { ok: true, count: products.length, products: products };
+
+  return _ok_({ schema: required, issues: issues }, reqId);
 }
 
-// ═══ GET: Staff (public - no PINs exposed) ═══
-function getStaffPublic() {
-  const ws = SS.getSheetByName('Admin_Staff');
-  const data = ws.getDataRange().getValues();
-  const staff = [];
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    if (!row[0]) continue;
-    const active = row[3];
-    if (active === false || active === 'FALSE' || active === 0) continue;
-    // Do NOT return pin (column E)
-    staff.push({ id: String(row[0]), name: String(row[1] || ''), role: String(row[2] || '') });
-  }
-  return { ok: true, staff: staff };
-}
-
-// ═══ GET: Artists ═══
+// ===== GET: Artists =====
 function getArtists() {
-  const ws = SS.getSheetByName('Admin_Artists');
+  const ws = _sheet_("Admin_Artists");
+  const h = _hmap_(ws);
   const data = ws.getDataRange().getValues();
+
+  const cId = _col_(h, SCHEMA.Admin_Artists.requiredAnyOf.id);
+  const cName = _col_(h, SCHEMA.Admin_Artists.requiredAnyOf.name);
+  const cType = _col_(h, SCHEMA.Admin_Artists.requiredAnyOf.type);
+  const cRate = _col_(h, SCHEMA.Admin_Artists.requiredAnyOf.rate);
+
+  // fallback v2.0: A=id, B=name, C=type, D=rate
   const artists = [];
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
-    if (!row[0]) continue;
-    artists.push({ id: String(row[0]), name: String(row[1] || ''), type: String(row[2] || ''), rate: Number(row[3]) || 0 });
-  }
-  return { ok: true, artists: artists };
-}
-
-// ═══ GET: Orders (recent 100) ═══
-function getOrders() {
-  const wsO = SS.getSheetByName('Orders');
-  const wsI = SS.getSheetByName('Order_Items');
-  const wsP = SS.getSheetByName('Payments');
-  const oData = wsO.getDataRange().getValues();
-  const iData = wsI.getDataRange().getValues();
-  const pData = wsP.getDataRange().getValues();
-  
-  const orders = [];
-  const start = Math.max(1, oData.length - 100);
-  for (let i = start; i < oData.length; i++) {
-    const row = oData[i];
-    if (!row[0]) continue;
-    // Column O = status (ACTIVE or VOID)
-    const status = String(row[14] || 'ACTIVE');
-    orders.push({
-      orderId: String(row[0]), date: _fmtDate(row[1]), staffId: String(row[2] || ''),
-      customerName: String(row[3] || ''), customerPhone: String(row[4] || ''),
-      subtotal: Number(row[5]) || 0, itemDiscTotal: Number(row[6]) || 0,
-      billDiscAmt: Number(row[7]) || 0, billDiscPct: Number(row[8]) || 0,
-      netCommBase: Number(row[9]) || 0, cardFeeAmt: Number(row[10]) || 0,
-      shipAmt: Number(row[11]) || 0, grandTotal: Number(row[12]) || 0,
-      notes: String(row[13] || ''), status: status, items: [], payments: [],
+    const id = (cId >= 0) ? row[cId] : row[0];
+    if (!id) continue;
+    artists.push({
+      id: String(id),
+      name: String((cName >= 0) ? row[cName] : (row[1] || "")),
+      type: String((cType >= 0) ? row[cType] : (row[2] || "")),
+      rate: _asNum_((cRate >= 0) ? row[cRate] : row[3], 0),
     });
   }
-  
+  return { ok: true, artists: artists, version: API_VERSION, ts: _nowStr_() };
+}
+
+function _getArtistMap_() {
+  try {
+    const res = getArtists();
+    const map = {};
+    (res.artists || []).forEach(a => { map[String(a.id)] = _asNum_(a.rate, 0); });
+    return map;
+  } catch (_) {
+    return {};
+  }
+}
+
+// ===== GET: Staff (public) =====
+function getStaffPublic() {
+  const ws = _sheet_("Admin_Staff");
+  const h = _hmap_(ws);
+  const data = ws.getDataRange().getValues();
+
+  const cId = _col_(h, SCHEMA.Admin_Staff.requiredAnyOf.staff_id);
+  const cName = _col_(h, SCHEMA.Admin_Staff.requiredAnyOf.name);
+  const cRole = _col_(h, SCHEMA.Admin_Staff.requiredAnyOf.role);
+  const cActive = _col_(h, SCHEMA.Admin_Staff.requiredAnyOf.active);
+
+  // fallback v2.0: A=id B=name C=role D=active
+  const staff = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const id = (cId >= 0) ? row[cId] : row[0];
+    if (!id) continue;
+
+    const active = (cActive >= 0) ? row[cActive] : row[3];
+    if (_isFalse_(active)) continue;
+
+    staff.push({
+      id: String(id),
+      name: String((cName >= 0) ? row[cName] : (row[1] || "")),
+      role: String((cRole >= 0) ? row[cRole] : (row[2] || "")),
+    });
+  }
+  return { ok: true, staff: staff, version: API_VERSION, ts: _nowStr_() };
+}
+
+// ===== GET: Products =====
+function getProducts() {
+  const ws = _sheet_("Admin_Products");
+  const h = _hmap_(ws);
+  const data = ws.getDataRange().getValues();
+  const artists = _getArtistMap_();
+
+  const cPid = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.product_id);
+  const cTen = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.ten_hang);
+  const cLoai = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.loai_hang);
+  const cNhom = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.nhom_hang);
+  const cBrand = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.brand);
+  const cPrice = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.price);
+  const cCost = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.cost);
+  const cQty = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.qty);
+  const cImg = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.img);
+  const cActive = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.active);
+
+  // fallback v2.0 indexes: A pid, B ten, C loai, D nhom, E brand, F price, G cost, H qty, I img, J active
+  const products = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const pid = (cPid >= 0) ? row[cPid] : row[0];
+    if (!pid) continue;
+
+    const active = (cActive >= 0) ? row[cActive] : row[9];
+    if (_isFalse_(active)) continue;
+
+    const tenHang = String((cTen >= 0) ? row[cTen] : (row[1] || ""));
+    const loaiHang = String((cLoai >= 0) ? row[cLoai] : (row[2] || ""));
+    const nhomHang = String((cNhom >= 0) ? row[cNhom] : (row[3] || ""));
+    const brand = String((cBrand >= 0) ? row[cBrand] : (row[4] || ""));
+    const isService = _isService_(loaiHang);
+    const displayName = nhomHang || tenHang || String(pid);
+
+    const price = _asNum_((cPrice >= 0) ? row[cPrice] : row[5], 0);
+    const cost = _asNum_((cCost >= 0) ? row[cCost] : row[6], 0);
+    const qtyRaw = _asNum_((cQty >= 0) ? row[cQty] : row[7], 0);
+    const img = String((cImg >= 0) ? row[cImg] : (row[8] || ""));
+
+    products.push({
+      id: String(pid),
+      name: displayName,
+      type: loaiHang,       // frontend dùng type để icon/filter
+      cat: nhomHang,        // frontend dùng cat để group / icon
+      brand: brand,
+      price: price,
+      cost: cost,
+      qty: isService ? 999 : qtyRaw,
+      img: img,
+      rate: artists[brand] || 0,
+      isService: isService,
+    });
+  }
+
+  return { ok: true, count: products.length, products: products, version: API_VERSION, ts: _nowStr_() };
+}
+
+// ===== GET: Orders (recent 100) =====
+function getOrders() {
+  const wsO = _sheet_("Orders");
+  const wsI = _sheet_("Order_Items");
+  const wsP = _sheet_("Payments");
+
+  const hO = _hmap_(wsO), hI = _hmap_(wsI), hP = _hmap_(wsP);
+
+  // Read last 100 orders only (performance)
+  const lastRowO = wsO.getLastRow();
+  const lastColO = Math.max(1, wsO.getLastColumn());
+  if (lastRowO < 2) return { ok: true, count: 0, orders: [], version: API_VERSION, ts: _nowStr_() };
+
+  const startRowO = Math.max(2, lastRowO - 99);
+  const oData = wsO.getRange(startRowO, 1, lastRowO - startRowO + 1, lastColO).getValues();
+
+  // Columns (header-based preferred, fallback v2.0 indices)
+  const cOid = _col_(hO, SCHEMA.Orders.requiredAnyOf.order_id);
+  const cDate = _col_(hO, SCHEMA.Orders.requiredAnyOf.date);
+  const cStaff = _col_(hO, SCHEMA.Orders.requiredAnyOf.staff_id);
+  const cCName = _col_(hO, SCHEMA.Orders.requiredAnyOf.customer_name);
+  const cCPhone = _col_(hO, SCHEMA.Orders.requiredAnyOf.customer_phone);
+  const cSubtotal = _col_(hO, SCHEMA.Orders.requiredAnyOf.subtotal);
+  const cItemDisc = _col_(hO, SCHEMA.Orders.requiredAnyOf.item_disc_total);
+  const cBillDiscAmt = _col_(hO, SCHEMA.Orders.requiredAnyOf.bill_disc_amt);
+  const cBillDiscPct = _col_(hO, SCHEMA.Orders.requiredAnyOf.bill_disc_pct);
+  const cNetComm = _col_(hO, SCHEMA.Orders.requiredAnyOf.net_comm_base);
+  const cCardFee = _col_(hO, SCHEMA.Orders.requiredAnyOf.card_fee_amt);
+  const cShip = _col_(hO, SCHEMA.Orders.requiredAnyOf.ship_amt);
+  const cGrand = _col_(hO, SCHEMA.Orders.requiredAnyOf.grand_total);
+  const cNotes = _col_(hO, SCHEMA.Orders.requiredAnyOf.notes);
+  const cStatus = _col_(hO, SCHEMA.Orders.requiredAnyOf.status);
+
+  // fallback v2.0: [0..14] theo script cũ
+  const orders = [];
+  for (let i = 0; i < oData.length; i++) {
+    const row = oData[i];
+
+    const oid = (cOid >= 0) ? row[cOid] : row[0];
+    if (!oid) continue;
+
+    const status = String((cStatus >= 0) ? row[cStatus] : (row[14] || "ACTIVE"));
+    orders.push({
+      orderId: String(oid),
+      date: _fmtDate_((cDate >= 0) ? row[cDate] : row[1]),
+      staffId: String((cStaff >= 0) ? row[cStaff] : (row[2] || "")),
+      customerName: String((cCName >= 0) ? row[cCName] : (row[3] || "")),
+      customerPhone: String((cCPhone >= 0) ? row[cCPhone] : (row[4] || "")),
+      subtotal: _asNum_((cSubtotal >= 0) ? row[cSubtotal] : row[5], 0),
+      itemDiscTotal: _asNum_((cItemDisc >= 0) ? row[cItemDisc] : row[6], 0),
+      billDiscAmt: _asNum_((cBillDiscAmt >= 0) ? row[cBillDiscAmt] : row[7], 0),
+      billDiscPct: _asNum_((cBillDiscPct >= 0) ? row[cBillDiscPct] : row[8], 0),
+      netCommBase: _asNum_((cNetComm >= 0) ? row[cNetComm] : row[9], 0),
+      cardFeeAmt: _asNum_((cCardFee >= 0) ? row[cCardFee] : row[10], 0),
+      shipAmt: _asNum_((cShip >= 0) ? row[cShip] : row[11], 0),
+      grandTotal: _asNum_((cGrand >= 0) ? row[cGrand] : row[12], 0),
+      notes: String((cNotes >= 0) ? row[cNotes] : (row[13] || "")),
+      status: status || "ACTIVE",
+      items: [],
+      payments: [],
+    });
+  }
+
   const orderMap = {};
-  orders.forEach(o => orderMap[o.orderId] = o);
-  
+  orders.forEach(o => { orderMap[o.orderId] = o; });
+
+  // Items: read all (OK cho MVP; nếu lớn sẽ tối ưu sau)
+  const iData = wsI.getDataRange().getValues();
+  // header-based / fallback v2.0 indices
+  const cIOrder = _col_(hI, SCHEMA.Order_Items.requiredAnyOf.order_id);
+  const cIProd = _col_(hI, SCHEMA.Order_Items.requiredAnyOf.product_id);
+  const cIName = _col_(hI, SCHEMA.Order_Items.requiredAnyOf.name);
+  const cIBrand = _col_(hI, SCHEMA.Order_Items.requiredAnyOf.brand);
+  const cICat = _col_(hI, SCHEMA.Order_Items.requiredAnyOf.cat);
+  const cIQty = _col_(hI, SCHEMA.Order_Items.requiredAnyOf.qty);
+  const cIUnit = _col_(hI, SCHEMA.Order_Items.requiredAnyOf.unit_price);
+  const cIDisc = _col_(hI, SCHEMA.Order_Items.requiredAnyOf.discount);
+  const cINet = _col_(hI, SCHEMA.Order_Items.requiredAnyOf.line_net);
+  const cIStaff = _col_(hI, SCHEMA.Order_Items.requiredAnyOf.staff_id);
+  const cIRate = _col_(hI, SCHEMA.Order_Items.requiredAnyOf.rate);
+  const cIComm = _col_(hI, SCHEMA.Order_Items.requiredAnyOf.comm_full);
+
   for (let i = 1; i < iData.length; i++) {
-    const row = iData[i]; const oid = String(row[1] || '');
-    if (orderMap[oid]) {
-      orderMap[oid].items.push({
-        productId: String(row[2] || ''), name: String(row[3] || ''), brand: String(row[4] || ''),
-        cat: String(row[5] || ''), qty: Number(row[6]) || 0, unitPrice: Number(row[7]) || 0,
-        discount: Number(row[8]) || 0, lineNet: Number(row[9]) || 0,
-        staffId: String(row[10] || ''), rate: Number(row[11]) || 0, commFull: Number(row[12]) || 0,
-      });
-    }
+    const row = iData[i];
+    const oid = String((cIOrder >= 0) ? row[cIOrder] : (row[1] || ""));
+    const o = orderMap[oid];
+    if (!o) continue;
+
+    o.items.push({
+      productId: String((cIProd >= 0) ? row[cIProd] : (row[2] || "")),
+      name: String((cIName >= 0) ? row[cIName] : (row[3] || "")),
+      brand: String((cIBrand >= 0) ? row[cIBrand] : (row[4] || "")),
+      cat: String((cICat >= 0) ? row[cICat] : (row[5] || "")),
+      qty: _asNum_((cIQty >= 0) ? row[cIQty] : row[6], 0),
+      unitPrice: _asNum_((cIUnit >= 0) ? row[cIUnit] : row[7], 0),
+      discount: _asNum_((cIDisc >= 0) ? row[cIDisc] : row[8], 0),
+      lineNet: _asNum_((cINet >= 0) ? row[cINet] : row[9], 0),
+      staffId: String((cIStaff >= 0) ? row[cIStaff] : (row[10] || "")),
+      rate: _asNum_((cIRate >= 0) ? row[cIRate] : row[11], 0),
+      commFull: _asNum_((cIComm >= 0) ? row[cIComm] : row[12], 0),
+    });
   }
-  
+
+  // Payments
+  const pData = wsP.getDataRange().getValues();
+  const cPOrder = _col_(hP, SCHEMA.Payments.requiredAnyOf.order_id);
+  const cPDate = _col_(hP, SCHEMA.Payments.requiredAnyOf.date);
+  const cPMethod = _col_(hP, SCHEMA.Payments.requiredAnyOf.method);
+  const cPAmount = _col_(hP, SCHEMA.Payments.requiredAnyOf.amount);
+  const cPNote = _col_(hP, SCHEMA.Payments.requiredAnyOf.note);
+  const cPPid = _col_(hP, SCHEMA.Payments.requiredAnyOf.payment_id);
+
   for (let i = 1; i < pData.length; i++) {
-    const row = pData[i]; const oid = String(row[1] || '');
-    if (orderMap[oid]) {
-      orderMap[oid].payments.push({
-        paymentId: String(row[0] || ''), date: _fmtDate(row[2]),
-        method: String(row[3] || ''), amount: Number(row[4]) || 0, note: String(row[6] || ''),
-      });
-    }
+    const row = pData[i];
+    const oid = String((cPOrder >= 0) ? row[cPOrder] : (row[1] || ""));
+    const o = orderMap[oid];
+    if (!o) continue;
+
+    o.payments.push({
+      paymentId: String((cPPid >= 0) ? row[cPPid] : (row[0] || "")),
+      date: _fmtDate_((cPDate >= 0) ? row[cPDate] : row[2]),
+      method: String((cPMethod >= 0) ? row[cPMethod] : (row[3] || "")),
+      amount: _asNum_((cPAmount >= 0) ? row[cPAmount] : row[4], 0),
+      note: String((cPNote >= 0) ? row[cPNote] : (row[6] || "")),
+    });
   }
-  
-  return { ok: true, count: orders.length, orders: orders.reverse() };
+
+  // newest first (giữ như v2.0)
+  return { ok: true, count: orders.length, orders: orders.reverse(), version: API_VERSION, ts: _nowStr_() };
 }
 
-// ═══ POST: Submit Order ═══
+// ===== POST: Submit Order =====
 function submitOrder(body) {
-  const wsO = SS.getSheetByName('Orders');
-  const wsI = SS.getSheetByName('Order_Items');
-  _unprotectSheet('Orders');
-  _unprotectSheet('Order_Items');
-  
-  const orderId = body.orderId || _nextOrderId();
-  const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
-  
-  wsO.appendRow([
-    orderId, now, body.staffId || '', body.customerName || '', body.customerPhone || '',
-    body.subtotal || 0, body.itemDiscTotal || 0, body.billDiscAmt || 0, body.billDiscPct || 0,
-    body.netCommBase || 0, body.cardFeeAmt || 0, body.shipAmt || 0, body.grandTotal || 0,
-    body.notes || '', 'ACTIVE', // Column O: status
-  ]);
-  
-  const items = body.items || [];
-  let itemCtr = 1;
-  for (const item of items) {
-    const lineItemId = orderId + '-' + String(itemCtr).padStart(2, '0');
-    wsI.appendRow([
-      lineItemId, orderId, item.productId || '', item.name || '', item.brand || '',
-      item.cat || '', item.qty || 0, item.unitPrice || 0, item.discount || 0,
-      item.lineNet || 0, body.staffId || '', item.rate || 0, item.commFull || 0, 0,
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+
+  try {
+    const wsO = _sheet_("Orders");
+    const wsI = _sheet_("Order_Items");
+
+    _tryUnprotect_("Orders");
+    _tryUnprotect_("Order_Items");
+    _tryUnprotect_("Admin_Products");
+    _tryUnprotect_("Admin_Stock_Log");
+
+    const orderId = body.orderId || _nextOrderId_();
+    const now = _nowStr_();
+
+    const items = Array.isArray(body.items) ? body.items : [];
+    if (!items.length) return _err_("No items in order");
+
+    // Append order row (v2.0 compatible layout)
+    wsO.appendRow([
+      orderId, now, body.staffId || "", body.customerName || "", body.customerPhone || "",
+      _asNum_(body.subtotal, 0), _asNum_(body.itemDiscTotal, 0),
+      _asNum_(body.billDiscAmt, 0), _asNum_(body.billDiscPct, 0),
+      _asNum_(body.netCommBase, 0), _asNum_(body.cardFeeAmt, 0),
+      _asNum_(body.shipAmt, 0), _asNum_(body.grandTotal, 0),
+      body.notes || "", "ACTIVE",
     ]);
-    itemCtr++;
+
+    // Append items (batch)
+    const rows = [];
+    for (let k = 0; k < items.length; k++) {
+      const item = items[k] || {};
+      const lineItemId = orderId + "-" + String(k + 1).padStart(2, "0");
+      rows.push([
+        lineItemId, orderId,
+        item.productId || "", item.name || "", item.brand || "",
+        item.cat || "",
+        _asNum_(item.qty, 0),
+        _asNum_(item.unitPrice, 0),
+        _asNum_(item.discount, 0),
+        _asNum_(item.lineNet, 0),
+        body.staffId || "",
+        _asNum_(item.rate, 0),
+        _asNum_(item.commFull, 0),
+        0,
+      ]);
+    }
+    const startRow = wsI.getLastRow() + 1;
+    wsI.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
+
+    // Stock decrement + log
+    _decrementStock_(items, orderId, body.staffId || "SYSTEM");
+
+    _tryReprotect_("Orders");
+    _tryReprotect_("Order_Items");
+
+    return { ok: true, orderId: orderId, itemCount: items.length, version: API_VERSION, ts: _nowStr_() };
+  } finally {
+    lock.releaseLock();
   }
-  
-  _decrementStock(items, orderId);
-  _reprotectSheet('Orders');
-  _reprotectSheet('Order_Items');
-  
-  return { ok: true, orderId: orderId, itemCount: items.length };
 }
 
-// ═══ POST: Void Order (admin only) ═══
+// ===== POST: Void Order (manager only) =====
 function voidOrder(body) {
-  if (body.staffRole !== 'manager') {
-    return { ok: false, error: 'Only managers can void orders' };
-  }
-  
-  const orderId = body.orderId;
-  if (!orderId) return { ok: false, error: 'orderId required' };
-  
-  const wsO = SS.getSheetByName('Orders');
-  _unprotectSheet('Orders');
+  const role = String(body.staffRole || "").toLowerCase().trim();
+  if (role !== "manager") return _err_("Only managers can void orders");
+
+  const orderId = String(body.orderId || "").trim();
+  if (!orderId) return _err_("orderId required");
+
+  const wsO = _sheet_("Orders");
+  const wsI = _sheet_("Order_Items");
+  const wsProd = _sheet_("Admin_Products");
+
+  _tryUnprotect_("Orders");
+  _tryUnprotect_("Order_Items");
+  _tryUnprotect_("Admin_Products");
+  _tryUnprotect_("Admin_Stock_Log");
+
   const oData = wsO.getDataRange().getValues();
-  
   let orderRow = -1;
   for (let i = 1; i < oData.length; i++) {
     if (String(oData[i][0]) === orderId) { orderRow = i + 1; break; }
   }
-  if (orderRow < 0) { _reprotectSheet('Orders'); return { ok: false, error: 'Order not found' }; }
-  
-  // Mark as VOID in column O
-  wsO.getRange(orderRow, 15).setValue('VOID');
-  
+  if (orderRow < 0) return _err_("Order not found");
+
+  // If already VOID, return OK
+  const curStatus = String(wsO.getRange(orderRow, 15).getValue() || "");
+  if (curStatus === "VOID") return { ok: true, orderId: orderId, status: "VOID", already: true, version: API_VERSION, ts: _nowStr_() };
+
+  wsO.getRange(orderRow, 15).setValue("VOID");
+
   // Restore stock for non-service items
-  const wsI = SS.getSheetByName('Order_Items');
   const iData = wsI.getDataRange().getValues();
-  const wsProd = SS.getSheetByName('Admin_Products');
   const prodData = wsProd.getDataRange().getValues();
-  const prodRowMap = {};
-  for (let i = 1; i < prodData.length; i++) prodRowMap[String(prodData[i][0])] = i + 1;
-  
+
+  // Build product row map by product_id (fallback A=product_id)
+  const rowMap = {};
+  for (let i = 1; i < prodData.length; i++) {
+    const pid = String(prodData[i][0] || "");
+    if (pid) rowMap[pid] = i + 1;
+  }
+
   for (let i = 1; i < iData.length; i++) {
     if (String(iData[i][1]) !== orderId) continue;
-    const pid = String(iData[i][2]);
-    const qty = Number(iData[i][6]) || 0;
-    const prodRow = prodRowMap[pid];
+    const pid = String(iData[i][2] || "");
+    const qty = _asNum_(iData[i][6], 0);
+    const prodRow = rowMap[pid];
     if (!prodRow || qty <= 0) continue;
-    
-    const loaiHang = String(prodData[prodRow - 1][2] || '');
-    if (_isService(loaiHang)) continue;
-    
-    const qtyBefore = Number(wsProd.getRange(prodRow, 8).getValue()) || 0;
+
+    const loaiHang = String(prodData[prodRow - 1][2] || "");
+    if (_isService_(loaiHang)) continue;
+
+    const qtyBefore = _asNum_(wsProd.getRange(prodRow, 8).getValue(), 0);
     const qtyAfter = qtyBefore + qty;
     wsProd.getRange(prodRow, 8).setValue(qtyAfter);
-    _logStock(pid, 'VOID_RESTORE', qty, qtyBefore, qtyAfter, orderId, body.staffId);
+
+    _logStock_(pid, "VOID_RESTORE", qty, qtyBefore, qtyAfter, orderId, body.staffId || "SYSTEM");
   }
-  
-  _reprotectSheet('Orders');
-  return { ok: true, orderId: orderId, status: 'VOID' };
+
+  _tryReprotect_("Orders");
+  return { ok: true, orderId: orderId, status: "VOID", version: API_VERSION, ts: _nowStr_() };
 }
 
-// ═══ POST: Add Payment ═══
+// ===== POST: Add Payment =====
 function addPayment(body) {
-  const wsP = SS.getSheetByName('Payments');
-  _unprotectSheet('Payments');
-  const paymentId = 'PAY-' + new Date().getTime();
-  const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
-  wsP.appendRow([paymentId, body.orderId || '', now, body.method || '', body.amount || 0, body.amountForComm || 0, body.note || '']);
-  _reprotectSheet('Payments');
-  return { ok: true, paymentId: paymentId };
+  const wsP = _sheet_("Payments");
+  _tryUnprotect_("Payments");
+
+  const paymentId = "PAY-" + new Date().getTime();
+  const now = _nowStr_();
+
+  wsP.appendRow([
+    paymentId,
+    body.orderId || "",
+    now,
+    body.method || "",
+    _asNum_(body.amount, 0),
+    _asNum_(body.amountForComm, 0),
+    body.note || "",
+  ]);
+
+  _tryReprotect_("Payments");
+  return { ok: true, paymentId: paymentId, version: API_VERSION, ts: _nowStr_() };
 }
 
-// ═══ POST: Update Stock ═══
+// ===== POST: Update Stock (manual adjustment) =====
 function updateStock(body) {
-  const productId = body.productId;
-  const qtyChange = body.qtyChange || 0;
-  if (!productId) return { ok: false, error: 'productId required' };
-  const ws = SS.getSheetByName('Admin_Products');
+  const productId = String(body.productId || "").trim();
+  const qtyChange = _asNum_(body.qtyChange, 0);
+  if (!productId) return _err_("productId required");
+
+  const ws = _sheet_("Admin_Products");
+  _tryUnprotect_("Admin_Products");
+  _tryUnprotect_("Admin_Stock_Log");
+
   const data = ws.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(productId)) {
-      const qtyBefore = Number(data[i][7]) || 0;
+    if (String(data[i][0]) === productId) {
+      const qtyBefore = _asNum_(data[i][7], 0);
       const qtyAfter = qtyBefore + qtyChange;
       ws.getRange(i + 1, 8).setValue(qtyAfter);
-      _logStock(productId, body.changeType || 'ADJUSTMENT', qtyChange, qtyBefore, qtyAfter, body.reference || '', body.staffId || 'MANUAL');
-      return { ok: true, productId: productId, qtyBefore: qtyBefore, qtyAfter: qtyAfter };
+
+      _logStock_(productId, body.changeType || "ADJUSTMENT", qtyChange, qtyBefore, qtyAfter, body.reference || "", body.staffId || "MANUAL");
+      return { ok: true, productId: productId, qtyBefore: qtyBefore, qtyAfter: qtyAfter, version: API_VERSION, ts: _nowStr_() };
     }
   }
-  return { ok: false, error: 'Product not found: ' + productId };
+  return _err_("Product not found: " + productId);
 }
 
-// ═══ POST: Bulk Stock Import (admin only) ═══
+// ===== POST: Bulk Import (manager only) =====
 function bulkImport(body) {
-  if (body.staffRole !== 'manager') {
-    return { ok: false, error: 'Only managers can import stock' };
-  }
-  
-  const items = body.items || [];
-  if (!items.length) return { ok: false, error: 'No items to import' };
-  
-  const ws = SS.getSheetByName('Admin_Products');
+  const role = String(body.staffRole || "").toLowerCase().trim();
+  if (role !== "manager") return _err_("Only managers can import stock");
+
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (!items.length) return _err_("No items to import");
+
+  const ws = _sheet_("Admin_Products");
+  _tryUnprotect_("Admin_Products");
+  _tryUnprotect_("Admin_Stock_Log");
+
+  const h = _hmap_(ws);
+  const cPid = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.product_id);
+  const cTen = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.ten_hang);
+  const cLoai = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.loai_hang);
+  const cNhom = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.nhom_hang);
+  const cBrand = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.brand);
+  const cPrice = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.price);
+  const cCost = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.cost);
+  const cQty = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.qty);
+  const cImg = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.img);
+  const cActive = _col_(h, SCHEMA.Admin_Products.requiredAnyOf.active);
+
+  // Fallback indexes (v2.0)
+  const fPid = 0, fTen = 1, fLoai = 2, fNhom = 3, fBrand = 4, fPrice = 5, fCost = 6, fQty = 7, fImg = 8, fActive = 9;
+
   const data = ws.getDataRange().getValues();
-  
-  // Build existing product map: id -> row number
   const existingMap = {};
   for (let i = 1; i < data.length; i++) {
-    existingMap[String(data[i][0])] = i + 1;
+    const pid = String((cPid >= 0) ? data[i][cPid] : data[i][fPid] || "");
+    if (pid) existingMap[pid] = i + 1;
   }
-  
-  let updated = 0;
-  let added = 0;
+
+  let updated = 0, added = 0;
   const errors = [];
-  
-  for (const item of items) {
-    const pid = String(item.product_id || '').trim();
-    if (!pid) { errors.push('Missing product_id'); continue; }
-    
-    const existingRow = existingMap[pid];
-    
-    if (existingRow) {
-      // UPDATE existing: only update stock (add to existing)
-      const qtyToAdd = Number(item.qty_add) || 0;
-      if (qtyToAdd > 0) {
-        const qtyBefore = Number(ws.getRange(existingRow, 8).getValue()) || 0;
+
+  for (const it of items) {
+    const pid = String(it.product_id || it.productId || "").trim();
+    if (!pid) { errors.push("Missing product_id"); continue; }
+
+    const qtyToAdd = _asNum_(it.qty_add ?? it.qty_to_add ?? it.qtyAdd ?? 0, 0);
+    const price = (it.price !== undefined && it.price !== null) ? _asNum_(it.price, 0) : null;
+    const cost = (it.cost !== undefined && it.cost !== null) ? _asNum_(it.cost, 0) : null;
+
+    const rowNum = existingMap[pid];
+
+    if (rowNum) {
+      // Update existing: add qty
+      if (qtyToAdd !== 0) {
+        const qtyBefore = _asNum_(ws.getRange(rowNum, (cQty >= 0 ? cQty + 1 : fQty + 1)).getValue(), 0);
         const qtyAfter = qtyBefore + qtyToAdd;
-        ws.getRange(existingRow, 8).setValue(qtyAfter);
-        _logStock(pid, 'IMPORT', qtyToAdd, qtyBefore, qtyAfter, 'BULK_IMPORT', body.staffId);
+        ws.getRange(rowNum, (cQty >= 0 ? cQty + 1 : fQty + 1)).setValue(qtyAfter);
+        _logStock_(pid, "IMPORT", qtyToAdd, qtyBefore, qtyAfter, "BULK_IMPORT", body.staffId || "SYSTEM");
         updated++;
       }
-      // Also update price if provided
-      if (item.price !== undefined && item.price !== null) {
-        ws.getRange(existingRow, 6).setValue(Number(item.price) || 0);
-      }
-      // Update cost if provided
-      if (item.cost !== undefined && item.cost !== null) {
-        ws.getRange(existingRow, 7).setValue(Number(item.cost) || 0);
-      }
+      // Update price/cost if provided
+      if (price !== null) ws.getRange(rowNum, (cPrice >= 0 ? cPrice + 1 : fPrice + 1)).setValue(price);
+      if (cost !== null) ws.getRange(rowNum, (cCost >= 0 ? cCost + 1 : fCost + 1)).setValue(cost);
     } else {
-      // NEW product: add row
-      if (!item.name) { errors.push(pid + ': missing name'); continue; }
-      ws.appendRow([
-        pid,                                    // A: product_id
-        item.ten_hang || 'Hàng hóa',          // B: ten_hang
-        item.type || '',                        // C: loai_hang
-        item.name || '',                        // D: nhom_hang (display name)
-        item.brand || '',                       // E: thuong_hieu
-        Number(item.price) || 0,                // F: gia_ban
-        Number(item.cost) || 0,                 // G: gia_von
-        Number(item.qty_add) || 0,              // H: ton_kho
-        item.image_url || '',                   // I: image_url
-        true,                                   // J: active
-      ]);
-      _logStock(pid, 'NEW_PRODUCT', Number(item.qty_add) || 0, 0, Number(item.qty_add) || 0, 'BULK_IMPORT', body.staffId);
+      // Add new product (require name)
+      const name = String(it.name || "").trim();
+      if (!name) { errors.push(pid + ": missing name"); continue; }
+
+      const row = new Array(ws.getLastColumn()).fill("");
+      // Fill by header if possible, else fallback layout
+      if (cPid >= 0) row[cPid] = pid; else row[fPid] = pid;
+      if (cTen >= 0) row[cTen] = it.ten_hang || "Hàng hóa"; else row[fTen] = it.ten_hang || "Hàng hóa";
+      if (cLoai >= 0) row[cLoai] = it.type || ""; else row[fLoai] = it.type || "";
+      if (cNhom >= 0) row[cNhom] = name; else row[fNhom] = name;
+      if (cBrand >= 0) row[cBrand] = it.brand || ""; else row[fBrand] = it.brand || "";
+      if (cPrice >= 0) row[cPrice] = _asNum_(it.price, 0); else row[fPrice] = _asNum_(it.price, 0);
+      if (cCost >= 0) row[cCost] = _asNum_(it.cost, 0); else row[fCost] = _asNum_(it.cost, 0);
+      if (cQty >= 0) row[cQty] = qtyToAdd; else row[fQty] = qtyToAdd;
+      if (cImg >= 0) row[cImg] = it.image_url || ""; else row[fImg] = it.image_url || "";
+      if (cActive >= 0) row[cActive] = true; else row[fActive] = true;
+
+      ws.appendRow(row);
+      _logStock_(pid, "NEW_PRODUCT", qtyToAdd, 0, qtyToAdd, "BULK_IMPORT", body.staffId || "SYSTEM");
       added++;
     }
   }
-  
-  return { ok: true, updated: updated, added: added, errors: errors };
+
+  return { ok: true, updated: updated, added: added, errors: errors, version: API_VERSION, ts: _nowStr_() };
 }
 
-// ═══ HELPERS ═══
-function _getArtistMap() {
-  const ws = SS.getSheetByName('Admin_Artists');
-  const data = ws.getDataRange().getValues();
-  const map = {};
-  for (let i = 1; i < data.length; i++) { if (data[i][0]) map[String(data[i][0])] = Number(data[i][3]) || 0; }
-  return map;
-}
-
-function _nextOrderId() {
-  const ws = SS.getSheetByName('Orders');
+// ===== Order id generator (locked by submitOrder lock) =====
+function _nextOrderId_() {
+  const ws = _sheet_("Orders");
   const lastRow = ws.getLastRow();
-  if (lastRow <= 1) return 'VJ-0001';
-  const lastId = String(ws.getRange(lastRow, 1).getValue());
-  const num = parseInt(lastId.replace(/\D/g, '')) || 0;
-  return 'VJ-' + String(num + 1).padStart(4, '0');
+  if (lastRow <= 1) return "VJ-0001";
+  const lastId = String(ws.getRange(lastRow, 1).getValue() || "");
+  const num = parseInt(lastId.replace(/\D/g, ""), 10) || 0;
+  return "VJ-" + String(num + 1).padStart(4, "0");
 }
 
-function _decrementStock(items, orderId) {
-  const ws = SS.getSheetByName('Admin_Products');
+// ===== Stock decrement (SALE) =====
+function _decrementStock_(items, orderId, changedBy) {
+  const ws = _sheet_("Admin_Products");
   const data = ws.getDataRange().getValues();
+
+  // Build map productId -> (rowIndex in sheet)
   const rowMap = {};
-  for (let i = 1; i < data.length; i++) rowMap[String(data[i][0])] = i + 1;
-  
+  for (let i = 1; i < data.length; i++) {
+    const pid = String(data[i][0] || "");
+    if (pid) rowMap[pid] = i + 1;
+  }
+
   for (const item of items) {
-    const pid = String(item.productId || '');
-    const qty = Number(item.qty) || 0;
+    const pid = String(item.productId || "").trim();
+    const qty = _asNum_(item.qty, 0);
+    if (!pid || qty <= 0) continue;
+
     const sheetRow = rowMap[pid];
-    if (!sheetRow || qty <= 0) continue;
-    const loaiHang = String(data[sheetRow - 1][2] || '');
-    if (_isService(loaiHang)) continue;
-    const qtyBefore = Number(ws.getRange(sheetRow, 8).getValue()) || 0;
+    if (!sheetRow) continue;
+
+    const loaiHang = String(data[sheetRow - 1][2] || "");
+    if (_isService_(loaiHang)) continue;
+
+    const qtyBefore = _asNum_(ws.getRange(sheetRow, 8).getValue(), 0);
     const qtyAfter = Math.max(0, qtyBefore - qty);
     ws.getRange(sheetRow, 8).setValue(qtyAfter);
-    _logStock(pid, 'SALE', -qty, qtyBefore, qtyAfter, orderId, 'SYSTEM');
+
+    _logStock_(pid, "SALE", -qty, qtyBefore, qtyAfter, orderId, changedBy || "SYSTEM");
   }
 }
 
-function _logStock(productId, changeType, qtyChange, qtyBefore, qtyAfter, reference, changedBy) {
-  const ws = SS.getSheetByName('Admin_Stock_Log');
-  _unprotectSheet('Admin_Stock_Log');
-  const logId = 'LOG-' + new Date().getTime() + '-' + Math.random().toString(36).substr(2, 4);
-  const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+// ===== Stock log =====
+function _logStock_(productId, changeType, qtyChange, qtyBefore, qtyAfter, reference, changedBy) {
+  // Nếu thiếu sheet log, bỏ qua thay vì làm fail nghiệp vụ
+  const ws = SS.getSheetByName("Admin_Stock_Log");
+  if (!ws) return;
+
+  _tryUnprotect_("Admin_Stock_Log");
+
+  const logId = "LOG-" + new Date().getTime() + "-" + Math.random().toString(36).substr(2, 4);
+  const now = _nowStr_();
   ws.appendRow([logId, now, productId, changeType, qtyChange, qtyBefore, qtyAfter, reference, changedBy]);
-  _reprotectSheet('Admin_Stock_Log');
+
+  _tryReprotect_("Admin_Stock_Log");
 }
 
-function _fmtDate(d) {
-  if (!d) return '';
-  if (d instanceof Date) return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+function _fmtDate_(d) {
+  if (!d) return "";
+  if (d instanceof Date) return Utilities.formatDate(d, TZ, "yyyy-MM-dd HH:mm:ss");
   return String(d);
 }
 
-function _unprotectSheet(name) {
-  const ws = SS.getSheetByName(name);
-  const protections = ws.getProtections(SpreadsheetApp.ProtectionType.SHEET);
-  for (const p of protections) p.remove();
+// ===== Sheet protection (best-effort, không làm fail nghiệp vụ) =====
+function _tryUnprotect_(name) {
+  try {
+    const ws = SS.getSheetByName(name);
+    if (!ws) return;
+    const protections = ws.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+    for (const p of protections) p.remove();
+  } catch (_) {}
 }
 
-function _reprotectSheet(name) {
-  const ws = SS.getSheetByName(name);
-  const protection = ws.protect().setDescription('VJ-POS locked: ' + name);
-  protection.setWarningOnly(true);
+function _tryReprotect_(name) {
+  try {
+    const ws = SS.getSheetByName(name);
+    if (!ws) return;
+    const protection = ws.protect().setDescription("VJ-POS locked: " + name);
+    protection.setWarningOnly(true);
+  } catch (_) {}
 }
-function testPin() {
-  const ws = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Admin_Staff');
-  const data = ws.getDataRange().getValues();
-  for (let i = 0; i < data.length; i++) {
-    Logger.log("Row " + i + ": col E = [" + data[i][4] + "] type=" + typeof data[i][4]);
-  }
+
+// ===== Debug helpers (optional) =====
+function testSchema() {
+  Logger.log(JSON.stringify(schemaReport(), null, 2));
 }
