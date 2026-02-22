@@ -387,6 +387,7 @@ function MainApp({auth,pin,onLogout}){
     var num=nextDraftNum;
     setNextDraftNum(num+1);
     var nd=createEmptyDraft(num);
+    // Label will be computed dynamically, not stored
     setDrafts(function(prev){return prev.concat([nd]);});
     setActiveDraftId(num);
     setTab("order");
@@ -577,9 +578,9 @@ function MainApp({auth,pin,onLogout}){
 
   // FIX #3: Draft tabs UI for the order tab
   var draftsBar = e("div",{className:"drafts-bar"},
-    drafts.map(function(d){
+    drafts.map(function(d,idx){
       var itemCount=d.cart.length;
-      var label=d.custName||("Draft "+d.id);
+      var label=d.custName||("Draft "+(idx+1));
       return e("button",{key:d.id,className:"draft-tab "+(d.id===activeDraftId?"on":""),onClick:function(){switchDraft(d.id);}},
         e("span",null,label),
         itemCount>0?e("span",{className:"draft-count"},itemCount):null,
