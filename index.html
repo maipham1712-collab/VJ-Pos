@@ -15,16 +15,16 @@
 body{background:var(--bg);color:var(--t);font-family:'DM Sans',sans-serif}
 .app{max-width:430px;margin:0 auto;min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;background:var(--bg);position:relative}
 .main{flex:1;overflow-y:auto;padding-bottom:90px;-webkit-overflow-scrolling:touch}
-/* FIX #1: Fixed header for iPhone notch/Dynamic Island */
-.top{position:fixed;top:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;padding:12px 16px 8px;padding-top:calc(var(--st) + 12px);display:flex;align-items:center;justify-content:space-between;z-index:50;background:var(--bg);border-bottom:1px solid var(--brd)}
+/* FIX #1: Safe area top padding for iPhone notch/Dynamic Island */
+.top{padding:12px 16px 8px;padding-top:calc(var(--st) + 12px);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;background:var(--bg);border-bottom:1px solid var(--brd)}
 .logo{font-family:'Space Mono',monospace;font-size:18px;font-weight:700;color:var(--gold);letter-spacing:2px}
 .tabs{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:rgba(20,20,22,0.92);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-top:1px solid var(--brd);display:flex;padding:8px 0 calc(8px + var(--sb));z-index:100}
 .tb{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;cursor:pointer;border:none;background:none;font-family:inherit;position:relative}
 .tb-i{font-size:22px;filter:grayscale(1) opacity(0.4);transition:all 0.2s}.tb.on .tb-i{filter:none}
 .tb-l{font-size:10px;color:var(--t3);font-weight:500}.tb.on .tb-l{color:var(--gold);font-weight:600}
 .badge{position:absolute;top:2px;right:calc(50% - 18px);background:var(--red);color:#fff;font-size:10px;font-weight:700;min-width:18px;height:18px;border-radius:9px;display:flex;align-items:center;justify-content:center;padding:0 4px}
-/* FIX #2: Search bar fixed below header — same pattern as .tabs */
-.search-sticky{position:fixed;top:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;z-index:49;background:var(--bg);padding-bottom:4px;border-bottom:1px solid var(--brd)}
+/* FIX #2: Sticky search bar & filters */
+.search-sticky{position:sticky;top:0;z-index:40;background:var(--bg);padding-bottom:4px}
 .sbar{margin:12px 16px 8px;position:relative}
 .sbar input{width:100%;background:var(--s2);border:1px solid var(--brd);border-radius:12px;padding:12px 16px 12px 40px;color:var(--t);font-size:15px;font-family:'DM Sans',sans-serif;outline:none}
 .sbar input:focus{border-color:var(--gold-dim)}.sbar input::placeholder{color:var(--t3)}
@@ -387,7 +387,6 @@ function MainApp({auth,pin,onLogout}){
     var num=nextDraftNum;
     setNextDraftNum(num+1);
     var nd=createEmptyDraft(num);
-    // Label will be computed dynamically, not stored
     setDrafts(function(prev){return prev.concat([nd]);});
     setActiveDraftId(num);
     setTab("order");
@@ -548,36 +547,19 @@ function MainApp({auth,pin,onLogout}){
 
   if(loading)return e("div",{className:"app"},e("div",{className:"loader"},e("div",{className:"spin"}),e("div",{style:{color:"var(--gold)",fontSize:14}},"Loading from Google Sheets...")));
 
-  // Refs for fixed header/search positioning
-  var topRef=useRef(null);
-  var searchRef=useRef(null);
-  var[topH,setTopH]=S(52);
-  var[searchH,setSearchH]=S(0);
-  useEffect(function(){
-    var measure=function(){
-      if(topRef.current)setTopH(topRef.current.offsetHeight);
-      if(searchRef.current)setSearchH(searchRef.current.offsetHeight);
-      else setSearchH(0);
-    };
-    measure();
-    var timer=setTimeout(measure,100);
-    return function(){clearTimeout(timer);};
-  },[tab,products.length]);
-  var mainPadTop=topH+(tab==="products"?searchH:0);
-
   // ── RENDER ──
 
-  // FIX #2: Search bar rendered OUTSIDE .main — fixed position below header
-  var searchBar = tab==="products" ? e("div",{className:"search-sticky",ref:searchRef,style:{top:topH}},
-    e("div",{className:"sbar"},e("span",{className:"si"},"🔍"),e("input",{placeholder:"Search products or code...",value:search,onChange:function(ev){setSearch(ev.target.value);}})),
-    e("div",{className:"flts"},
-      e("div",{className:"fs"},categories.slice(0,15).map(function(c){return e("button",{key:c,className:"pill "+(catFilter===c?"on":""),onClick:function(){setCatFilter(c);}},c==="ALL"?"All Types":catIcon(c)+" "+c);})),
-      e("div",{className:"fd"}),
-      e("div",{className:"fs"},brands.map(function(b){return e("button",{key:b,className:"pill "+(brandFilter===b?"on":""),onClick:function(){setBrandFilter(b);}},b==="ALL"?"All Brands":b);}))
-    )
-  ) : null;
-
+  // FIX #2: Products tab with sticky search bar and filters
+  // Search-sticky is a DIRECT child of .main so position:sticky works against the scroll container
   var productsTab = tab==="products" ? e(Fragment,null,
+    e("div",{className:"search-sticky"},
+      e("div",{className:"sbar"},e("span",{className:"si"},"🔍"),e("input",{placeholder:"Search products or code...",value:search,onChange:function(ev){setSearch(ev.target.value);}})),
+      e("div",{className:"flts"},
+        e("div",{className:"fs"},categories.slice(0,15).map(function(c){return e("button",{key:c,className:"pill "+(catFilter===c?"on":""),onClick:function(){setCatFilter(c);}},c==="ALL"?"All Types":catIcon(c)+" "+c);})),
+        e("div",{className:"fd"}),
+        e("div",{className:"fs"},brands.map(function(b){return e("button",{key:b,className:"pill "+(brandFilter===b?"on":""),onClick:function(){setBrandFilter(b);}},b==="ALL"?"All Brands":b);}))
+      )
+    ),
     e("div",{className:"pcnt"},filtered.length+" products · tap to add"),
     e("div",{className:"pgrid"},filtered.map(function(p){return e("div",{key:p.id,className:"pcard",onClick:function(){quickAdd(p);}},
       e("div",{className:"pimg"},
@@ -595,9 +577,9 @@ function MainApp({auth,pin,onLogout}){
 
   // FIX #3: Draft tabs UI for the order tab
   var draftsBar = e("div",{className:"drafts-bar"},
-    drafts.map(function(d,idx){
+    drafts.map(function(d){
       var itemCount=d.cart.length;
-      var label=d.custName||("Draft "+(idx+1));
+      var label=d.custName||("Draft "+d.id);
       return e("button",{key:d.id,className:"draft-tab "+(d.id===activeDraftId?"on":""),onClick:function(){switchDraft(d.id);}},
         e("span",null,label),
         itemCount>0?e("span",{className:"draft-count"},itemCount):null,
@@ -730,8 +712,8 @@ function MainApp({auth,pin,onLogout}){
     toast ? e("div",{className:"toast",key:Date.now()},toast) : null,
     submitting ? e("div",{className:"submitting"},e("div",{className:"spin"}),e("div",{className:"submitting-t"},"Saving to Google Sheets...")) : null,
     e("div",{className:"app"},
-      // Header — FIX #1: fixed position with safe area padding
-      e("div",{className:"top",ref:topRef},
+      // Header — FIX #1: safe area padding applied via CSS
+      e("div",{className:"top"},
         e("div",{className:"logo"},"VJ·POS"),
         e("div",{style:{display:"flex",alignItems:"center",gap:8}},
           e("button",{onClick:refreshProducts,style:{background:"none",border:"none",fontSize:16,cursor:"pointer",padding:4}},"🔄"),
@@ -741,10 +723,8 @@ function MainApp({auth,pin,onLogout}){
         )
       ),
       error ? e("div",{className:"err-banner"},"⚠️ "+error) : null,
-      // FIX #2: Search bar sits outside .main — always visible on Products tab
-      searchBar,
-      // Main content — padding-top accounts for fixed header + search bar
-      e("div",{className:"main",style:{paddingTop:mainPadTop}},
+      // Main content
+      e("div",{className:"main"},
         productsTab,
         orderTab,
         ordersListTab,
