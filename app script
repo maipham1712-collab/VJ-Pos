@@ -45,7 +45,14 @@ const SCHEMA = {
       product_id: ["product_id","id","productid"],
       loai_hang: ["loai_hang","type","loaihang"],
       nhom_hang: ["nhom_hang","cat","category","nhomhang","group"],
-      ten_hang: ["ten_hang","ten_hàng","tenhang"],
+      // Keep broad aliases so product name is read reliably across sheet naming styles.
+      ten_hang: [
+        "ten_hang","ten_hàng","tenhang",
+        "product_name","product name","name",
+        "ten_san_pham","ten san pham","tensanpham",
+        "ten_sp","ten sp","tensp",
+        "ten hang"
+      ],
       brand: ["brand_id","brand","thuong_hieu","thương_hiệu"],
       price: ["gia_ban","price","giaban"],
       cost: ["gia_von","cost","giavon"],
@@ -265,7 +272,20 @@ function _sheet_(name) {
 function _headers_(ws) {
   const lastCol = Math.max(1, ws.getLastColumn());
   const row = ws.getRange(1, 1, 1, lastCol).getValues()[0] || [];
-  return row.map(h => String(h || "").trim().toLowerCase());
+  return row.map(h => _normalizeHeader_(h));
+}
+
+function _normalizeHeader_(v) {
+  // Normalize to improve matching: lowercase, strip accents, unify spaces/hyphens.
+  const s = String(v || "").trim().toLowerCase();
+  if (!s) return "";
+  return s
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[đ]/g, "d")
+    .replace(/[\s-]+/g, "_")
+    .replace(/[^a-z0-9_]/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 function _hmap_(ws) {
@@ -278,7 +298,7 @@ function _hmap_(ws) {
 // find a column index by trying a list of header names
 function _col_(hmap, names) {
   for (const n of names) {
-    const key = String(n || "").trim().toLowerCase();
+    const key = _normalizeHeader_(n);
     if (key && hmap[key] !== undefined) return hmap[key];
   }
   return -1;
@@ -289,7 +309,7 @@ function _appendByHeader_(ws, obj) {
   const map = _hmap_(ws);
   const row = new Array(ws.getLastColumn()).fill("");
   for (const k in obj) {
-    const key = String(k).trim().toLowerCase();
+    const key = _normalizeHeader_(k);
     if (map[key] !== undefined) row[map[key]] = obj[k];
   }
   ws.appendRow(row);
@@ -443,12 +463,12 @@ function schemaReport(reqId) {
 
     const hs = _headers_(ws);
     issues.detectedHeaders[sheetName] = hs;
+    const hmap = _hmap_(ws);
 
     const miss = [];
     const req = SCHEMA[sheetName].requiredAnyOf;
     for (const key in req) {
-      const variants = req[key].map(x => String(x).toLowerCase());
-      const ok = variants.some(v => hs.indexOf(v) >= 0);
+      const ok = _col_(hmap, req[key]) >= 0;
       if (!ok) miss.push({ field: key, expectedOneOf: req[key] });
     }
     if (miss.length) issues.missingHeaders[sheetName] = miss;
