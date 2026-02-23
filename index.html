@@ -13,19 +13,18 @@
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 :root{--bg:#08090C;--s1:#10121A;--s2:#181B24;--s3:#22252F;--brd:#2A2D3A;--t:#E8ECF2;--t2:#8A90A0;--t3:#525870;--gold:#B0C4D8;--gold-dim:#5A7A94;--green:#34D399;--red:#F87171;--blue:#60A5FA;--accent2:#7EB8DA;--r:14px;--rs:8px;--sb:env(safe-area-inset-bottom,16px);--st:env(safe-area-inset-top,0px)}
 body{background:var(--bg);color:var(--t);font-family:'DM Sans',sans-serif}
-.app{max-width:430px;margin:0 auto;min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;background:var(--bg);position:relative}
-.main{flex:1;overflow-y:auto;padding-bottom:90px;-webkit-overflow-scrolling:touch}
+.app{max-width:430px;margin:0 auto;height:100vh;height:100dvh;display:flex;flex-direction:column;background:var(--bg);position:relative;overflow:hidden}
+.main{flex:1;min-height:0;overflow-y:auto;padding-bottom:90px;-webkit-overflow-scrolling:touch}
 /* FIX #1: Safe area top padding for iPhone notch/Dynamic Island */
-.top{padding:12px 16px 8px;padding-top:calc(var(--st) + 12px);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;background:linear-gradient(180deg,var(--bg) 60%,transparent);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-bottom:1px solid rgba(176,196,216,0.08)}
+.top{padding:12px 16px 8px;padding-top:calc(var(--st) + 12px);display:flex;align-items:center;justify-content:space-between;z-index:50;background:var(--bg);border-bottom:1px solid rgba(176,196,216,0.08);flex-shrink:0}
 .logo{font-family:'Space Mono',monospace;font-size:18px;font-weight:700;color:var(--gold);letter-spacing:2px;text-shadow:0 0 20px rgba(126,184,218,0.3)}
 .tabs{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:rgba(16,18,26,0.92);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-top:1px solid rgba(176,196,216,0.08);display:flex;padding:8px 0 calc(8px + var(--sb));z-index:100}
 .tb{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;cursor:pointer;border:none;background:none;font-family:inherit;position:relative}
 .tb-i{font-size:22px;filter:grayscale(1) opacity(0.4);transition:all 0.2s}.tb.on .tb-i{filter:none}
 .tb-l{font-size:10px;color:var(--t3);font-weight:500}.tb.on .tb-l{color:var(--gold);font-weight:600}
 .badge{position:absolute;top:2px;right:calc(50% - 18px);background:var(--red);color:#fff;font-size:10px;font-weight:700;min-width:18px;height:18px;border-radius:9px;display:flex;align-items:center;justify-content:center;padding:0 4px}
-/* FIX #2: Sticky search bar & filters — FUTURISTIC */
-.search-sticky{position:sticky;top:0;z-index:40;background:linear-gradient(180deg,var(--bg) 80%,rgba(8,9,12,0.85));backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);padding-bottom:6px;transition:box-shadow 0.2s}
-.search-sticky.scrolled{box-shadow:0 4px 24px rgba(0,0,0,0.5),0 1px 0 rgba(126,184,218,0.06)}
+/* Search bar — fixed above scroll area, never scrolls away */
+.search-sticky{background:var(--bg);padding-bottom:6px;border-bottom:1px solid rgba(176,196,216,0.06);flex-shrink:0}
 .sbar{margin:12px 16px 8px;position:relative}
 .sbar input{width:100%;background:var(--s2);border:1px solid var(--brd);border-radius:12px;padding:12px 40px 12px 40px;color:var(--t);font-size:15px;font-family:'DM Sans',sans-serif;outline:none;transition:border-color 0.2s,box-shadow 0.2s}
 .sbar input:focus{border-color:var(--accent2);box-shadow:0 0 0 3px rgba(126,184,218,0.12)}.sbar input::placeholder{color:var(--t3)}
@@ -119,7 +118,7 @@ body{background:var(--bg);color:var(--t);font-family:'DM Sans',sans-serif}
 .btn-red{background:var(--red);color:#fff}
 .oc.void{opacity:.4;border-left:3px solid var(--red)}
 .st-void{background:rgba(248,113,113,.15);color:var(--red)}
-.login{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;min-height:100dvh;padding:40px 32px;padding-top:calc(var(--st) + 40px);text-align:center}
+.login{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;padding:40px 32px;padding-top:calc(var(--st) + 40px);text-align:center;overflow-y:auto}
 .login-logo{font-family:'Space Mono',monospace;font-size:32px;font-weight:700;color:var(--gold);letter-spacing:4px;margin-bottom:8px;text-shadow:0 0 30px rgba(126,184,218,0.4)}
 .login-sub{font-size:14px;color:var(--t3);margin-bottom:40px}
 .pin-dots{display:flex;gap:16px;margin-bottom:32px}
@@ -146,7 +145,7 @@ body{background:var(--bg);color:var(--t);font-family:'DM Sans',sans-serif}
 .draft-count{background:rgba(255,255,255,0.15);font-size:10px;padding:1px 5px;border-radius:8px;font-weight:700;font-family:'Space Mono',monospace}
 .draft-tab.on .draft-count{background:rgba(0,0,0,0.2);color:var(--t)}
 /* Commission Welcome Screen */
-.welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;min-height:100dvh;padding:40px 32px;padding-top:calc(var(--st) + 40px);text-align:center;animation:fi 0.3s ease-out}
+.welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;padding:40px 32px;padding-top:calc(var(--st) + 40px);text-align:center;overflow-y:auto;animation:fi 0.3s ease-out}
 .welcome-card{background:var(--s1);border:1px solid var(--brd);border-radius:20px;padding:28px 24px;width:100%;max-width:340px;margin-bottom:20px;box-shadow:0 8px 32px rgba(0,0,0,0.3)}
 .welcome-name{font-size:22px;font-weight:700;margin-bottom:4px;color:var(--t)}
 .welcome-role{font-size:13px;color:var(--t2);text-transform:uppercase;letter-spacing:1px;margin-bottom:20px}
@@ -165,7 +164,7 @@ body{background:var(--bg);color:var(--t);font-family:'DM Sans',sans-serif}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script>
 const{useState,useEffect,useCallback,useMemo,useRef,createElement:e,Fragment}=React;
-const API="https://script.google.com/macros/s/AKfycbyYrjVZ7yWO5Jn_l0n-wYh2P1eO0KB-AMZ0uwqavrGXxuYHSnnsHrX1qn4S_mCx1biG7A/exec";
+const API="https://script.google.com/macros/s/AKfycbxqUOFg67vLe2GOa1JMHNopzLyHlW7j-meuBKs4AraQH80yJl7rRAUEW7zPDKIXmKoh1A/exec";
 const CARD_FEE_RATE=0.03;
 const fmt=n=>new Intl.NumberFormat("vi-VN").format(Math.round(n));
 const fmtK=n=>{if(n>=1e6)return(n/1e6).toFixed(1)+"M";if(n>=1e3)return Math.round(n/1e3)+"K";return fmt(n)};
@@ -472,8 +471,6 @@ function MainApp({auth,pin,onLogout}){
   var[selOrder,setSelOrder]=S(null);var[showPay,setShowPay]=S(null);var[showCustom,setShowCustom]=S(false);var[customName,setCustomName]=S("");var[customPrice,setCustomPrice]=S(0);
   var[toast,setToast]=S(null);var[justAddedId,setJustAddedId]=S(null);var[submitting,setSubmitting]=S(false);
   var[importText,setImportText]=S("");var[importPreview,setImportPreview]=S(null);
-  var mainRef=useRef(null);
-  var[searchScrolled,setSearchScrolled]=useState(false);
 
   var showToast=function(msg,dur){setToast(msg);setTimeout(function(){setToast(null);},dur||1500);};
 
@@ -589,15 +586,6 @@ function MainApp({auth,pin,onLogout}){
 
   useEffect(function(){if(selOrder){var u=orders.find(function(o){return o.orderId===selOrder.orderId;});if(u)setSelOrder(u);}},[orders]);
 
-  // Scroll detection for search-sticky shadow (must be before early return)
-  useEffect(function(){
-    var mainEl=mainRef.current;
-    if(!mainEl)return;
-    var handler=function(){setSearchScrolled(mainEl.scrollTop>8);};
-    mainEl.addEventListener("scroll",handler,{passive:true});
-    return function(){mainEl.removeEventListener("scroll",handler);};
-  },[tab]);
-
   var refreshProducts=async function(){showToast("🔄 Refreshing...");try{var r=await apiGet("products");if(r.ok){setProducts(r.products);showToast("✓ "+r.count+" products loaded");}}catch(err){showToast("❌ "+err.message,3000);}};
 
   var parseImport=function(){
@@ -623,18 +611,6 @@ function MainApp({auth,pin,onLogout}){
   // FIX #2: Products tab with sticky search bar and filters
   // Search-sticky is a DIRECT child of .main so position:sticky works against the scroll container
   var productsTab = tab==="products" ? e(Fragment,null,
-    e("div",{className:"search-sticky"+(searchScrolled?" scrolled":"")},
-      e("div",{className:"sbar"},
-        e("span",{className:"si"},"🔍"),
-        e("input",{placeholder:"Search products or code...",value:search,onChange:function(ev){setSearch(ev.target.value);}}),
-        search?e("button",{className:"s-clear",onClick:function(){setSearch("");}},"✕"):null
-      ),
-      e("div",{className:"flts"},
-        e("div",{className:"fs"},categories.slice(0,15).map(function(c){return e("button",{key:c,className:"pill "+(catFilter===c?"on":""),onClick:function(){setCatFilter(c);}},c==="ALL"?"All Types":catIcon(c)+" "+c);})),
-        e("div",{className:"fd"}),
-        e("div",{className:"fs"},brands.map(function(b){return e("button",{key:b,className:"pill "+(brandFilter===b?"on":""),onClick:function(){setBrandFilter(b);}},b==="ALL"?"All Brands":b);}))
-      )
-    ),
     e("div",{className:"pcnt"},filtered.length+" products"+(search?" for \""+search+"\"":"")+" · tap to add"),
     e("div",{className:"pgrid"},filtered.map(function(p){return e("div",{key:p.id,className:"pcard",onClick:function(){quickAdd(p);}},
       e("div",{className:"pimg"},
@@ -716,7 +692,7 @@ function MainApp({auth,pin,onLogout}){
       : orders.map(function(o){return e("div",{key:o.orderId,className:"oc"+(o.status==="VOID"?" void":""),onClick:function(){setSelOrder(o);}},
           e("div",{className:"oh"},e("span",{className:"oid"},o.orderId),e("span",{className:"ost st-"+getStatus(o)},getStatus(o))),
           e("div",{style:{fontSize:13,color:"var(--t)"}},"👤 "+(o.staffName||o.staffId)+" → "+(o.customerName||"Walk-in")),
-          e("div",{style:{fontSize:12,color:"var(--t3)"}},typeof o.date==="string"?o.date.split("T")[0]:o.date),
+          e("div",{style:{fontSize:12,color:"var(--t3)"}},typeof o.date==="string"?o.date.split(" ")[0]:String(o.date)),
           e("div",{className:"otot"},fmt(o.grandTotal)+"đ"),
           e("div",{className:"oiprev"},(o.items||[]).map(function(i){return i.name;}).join(", "))
         );})
@@ -798,8 +774,21 @@ function MainApp({auth,pin,onLogout}){
         )
       ),
       error ? e("div",{className:"err-banner"},"⚠️ "+error) : null,
-      // Main content
-      e("div",{className:"main",ref:mainRef},
+      // Search bar: OUTSIDE .main so it never scrolls away
+      tab==="products" ? e("div",{className:"search-sticky"},
+        e("div",{className:"sbar"},
+          e("span",{className:"si"},"🔍"),
+          e("input",{placeholder:"Search products or code...",value:search,onChange:function(ev){setSearch(ev.target.value);}}),
+          search?e("button",{className:"s-clear",onClick:function(){setSearch("");}},"✕"):null
+        ),
+        e("div",{className:"flts"},
+          e("div",{className:"fs"},categories.slice(0,15).map(function(c){return e("button",{key:c,className:"pill "+(catFilter===c?"on":""),onClick:function(){setCatFilter(c);}},c==="ALL"?"All Types":catIcon(c)+" "+c);})),
+          e("div",{className:"fd"}),
+          e("div",{className:"fs"},brands.map(function(b){return e("button",{key:b,className:"pill "+(brandFilter===b?"on":""),onClick:function(){setBrandFilter(b);}},b==="ALL"?"All Brands":b);}))
+        )
+      ) : null,
+      // Main content (scroll area — search is above this)
+      e("div",{className:"main"},
         productsTab,
         orderTab,
         ordersListTab,
