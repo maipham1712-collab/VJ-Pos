@@ -373,10 +373,12 @@ function login(pin) {
         if (oid) orderInfo[oid] = { date: dateRaw, status: status };
       }
 
-      // Current month and last month boundaries
-      var now = new Date();
-      var thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      var lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      // Current month and last month boundaries — timezone-safe via formatted strings
+      // _nowStr_ writes dates in TZ (VN), so we compare using the same TZ
+      var nowFormatted = Utilities.formatDate(new Date(), TZ, "yyyy-MM");
+      var lastMonthDate = new Date();
+      lastMonthDate.setMonth(lastMonthDate.getMonth() - 1);
+      var lastMonthFormatted = Utilities.formatDate(lastMonthDate, TZ, "yyyy-MM");
 
       // Sum commission from Order_Items for this staff
       const cIOrder = _col_(hI, SCHEMA.Order_Items.requiredAnyOf.order_id);
@@ -393,12 +395,20 @@ function login(pin) {
         if (!info || info.status === "VOID") continue;
 
         var commAmt = _asNum_((cIComm >= 0) ? row[cIComm] : row[12], 0);
-        var orderDate = (info.date instanceof Date) ? info.date : new Date(info.date);
-        if (isNaN(orderDate.getTime())) continue;
 
-        if (orderDate >= thisMonthStart) {
+        // Format order date in VN timezone for safe month comparison
+        var orderYM = "";
+        try {
+          var dt = (info.date instanceof Date) ? info.date : new Date(info.date);
+          if (!isNaN(dt.getTime())) {
+            orderYM = Utilities.formatDate(dt, TZ, "yyyy-MM");
+          }
+        } catch(_) {}
+        if (!orderYM) continue;
+
+        if (orderYM === nowFormatted) {
           commission.thisMonth += commAmt;
-        } else if (orderDate >= lastMonthStart && orderDate < thisMonthStart) {
+        } else if (orderYM === lastMonthFormatted) {
           commission.lastMonth += commAmt;
         }
       }
